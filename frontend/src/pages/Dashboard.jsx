@@ -5,7 +5,7 @@ import {
   Popup,
   setWorkerUrl,
 } from "maplibre-gl";
-import maplibreWorker from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
+import maplibreWorker from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "./Dashboard.css";
 import { getDashboardStats } from "../../services/appData";
@@ -347,12 +347,14 @@ export default function Dashboard() {
         applyMapPalette(map, { transparent: true });
         addWorldLand(map);
         addCityLights(map, { globe: true });
-        map.setFog({
-          color: "#061b32",
-          "high-color": "#1a6c9c",
-          "space-color": "rgba(0,0,0,0)",
-          "horizon-blend": 0.12,
-        });
+        if (typeof map.setFog === "function") {
+          map.setFog({
+            color: "#061b32",
+            "high-color": "#1a6c9c",
+            "space-color": "rgba(0,0,0,0)",
+            "horizon-blend": 0.12,
+          });
+        }
       } catch (error) {
         console.warn("Globe atmosphere could not be applied:", error);
       }
