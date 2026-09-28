@@ -10656,3 +10656,15 @@ select.cs-filter-select option {
     pointer-events: none !important;
   }
 }
+
+/* Match the dashboard typography throughout the other application pages.
+   Network Graph keeps its own page-specific typography unchanged. */
+.cs-page,
+.vasp-page {
+  font-family: "Rajdhani", sans-serif !important;
+}
+
+.cs-page :is(h1, h2, h3),
+.vasp-page :is(h1, h2, h3) {
+  font-family: "Orbitron", sans-serif !important;
+}
