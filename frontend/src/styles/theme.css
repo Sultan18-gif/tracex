@@ -10668,3 +10668,169 @@ select.cs-filter-select option {
 .vasp-page :is(h1, h2, h3) {
   font-family: "Orbitron", sans-serif !important;
 }
+
+/* Responsive layout refinements for laptop, tablet, and phone widths. */
+@media (min-width: 1101px) and (max-width: 1440px) {
+  .cs-page {
+    padding: 24px clamp(24px, 2.4vw, 36px) 36px;
+  }
+
+  .cs-page-header {
+    gap: 22px;
+  }
+}
+
+@media (max-width: 900px) {
+  .cs-app-content,
+  .cs-page,
+  .vasp-page,
+  .network-page {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .cs-page-header-actions,
+  .cs-dashboard-header-actions {
+    flex-wrap: wrap;
+  }
+
+  .cs-stat-grid,
+  .cs-case-summary,
+  .vasp-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .cs-panel,
+  .vasp-directory,
+  .network-panel,
+  .network-details {
+    min-width: 0;
+  }
+}
+
+@media (max-width: 600px) {
+  .cs-navbar {
+    height: 58px;
+    padding-inline: 12px;
+  }
+
+  .cs-navbar-right {
+    gap: 8px;
+  }
+
+  .cs-page {
+    min-height: calc(100svh - 58px);
+    padding: 16px 12px 24px;
+  }
+
+  .cs-page-header {
+    gap: 14px;
+    margin-bottom: 18px;
+  }
+
+  .cs-page-header h1,
+  .cs-page-title {
+    font-size: clamp(22px, 7vw, 30px);
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+  }
+
+  .cs-page-header p,
+  .cs-page-subtitle {
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .cs-page :is(input, select, textarea),
+  .vasp-page :is(input, select, textarea) {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .cs-search-bar,
+  .cs-dashboard-header-actions,
+  .vasp-toolbar {
+    width: 100%;
+    gap: 8px;
+  }
+
+  .cs-search-bar input,
+  .cs-search-input,
+  .vasp-search,
+  .vasp-toolbar select {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .cs-stat-grid,
+  .cs-case-summary,
+  .vasp-stats {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cs-panel,
+  .vasp-directory,
+  .network-panel,
+  .network-details {
+    padding: 14px;
+    border-radius: 10px;
+  }
+
+  .cs-page .cs-table,
+  .vasp-page .vasp-table {
+    width: 100%;
+    white-space: nowrap;
+  }
+
+  .cs-page .cs-table {
+    min-width: 620px;
+  }
+
+  .vasp-page .vasp-table {
+    min-width: 680px;
+  }
+
+  .vasp-table-wrapper,
+  .cs-page div[style*="overflowX"] {
+    max-width: 100%;
+    overscroll-behavior-inline: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .cs-page :is(button, .cs-primary-btn, .cs-secondary-btn),
+  .vasp-page :is(button, .vasp-action-button) {
+    min-height: 42px;
+  }
+
+  .network-page {
+    padding-inline: 12px;
+  }
+
+  .network-map-container {
+    min-height: 400px;
+    max-height: 68svh;
+  }
+}
+
+@media (max-width: 380px) {
+  .cs-navbar-brand {
+    font-size: 16px;
+  }
+
+  .cs-menu-button {
+    width: 38px;
+    height: 38px;
+  }
+
+  .cs-page {
+    padding-inline: 10px;
+  }
+
+  .cs-panel,
+  .vasp-directory,
+  .network-panel,
+  .network-details {
+    padding: 11px;
+  }
+}
