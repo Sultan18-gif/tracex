@@ -3,33 +3,89 @@ const { db } = require("../firebase");
 // Create a new case
 const createCase = async (req, res) => {
   try {
-    const { walletAddress, description, title, riskScore } = req.body;
-
-    if (!walletAddress || !description) {
-      return res.status(400).json({
-        message: "Wallet address and description are required"
-      });
-    }
-
-    const newCase = {
-      caseId: `CASE-${Date.now()}`,
-      title: title || "Fraud Investigation",
+    const {
       walletAddress,
       description,
-      riskScore: riskScore || "Medium",
+      title,
+      priority,
+      riskScore,
+      createdBy
+    } = req.body || {};
+
+    const now = new Date();
+
+    const newCase = {
+      // Automatically generated case ID
+      caseId: `CASE-${Date.now()}`,
+
+      // Basic case information
+      title:
+        title?.trim() ||
+        "New Blockchain Investigation",
+
+      walletAddress:
+        walletAddress?.trim() || "",
+
+      description:
+        description?.trim() ||
+        "New blockchain investigation case.",
+
+      // Risk / priority
+      priority:
+        priority ||
+        riskScore ||
+        "Medium",
+
+      riskScore:
+        riskScore ||
+        priority ||
+        "Medium",
+
+      // Case status
       status: "Open",
-      createdAt: new Date()
+
+      // Investigator
+      createdBy:
+        createdBy ||
+        "Investigator",
+
+      // Creation time
+      createdAt: now,
+
+      // Investigation data
+      wallets: walletAddress?.trim()
+        ? [walletAddress.trim()]
+        : [],
+
+      transactions: [],
+
+      findings: [],
+
+      evidence: [],
+
+      tracedWallets: [],
+
+      detectedExchanges: [],
+
+      alerts: []
     };
 
-    const docRef = await db.collection("cases").add(newCase);
+    // Save case to Firebase Firestore
+    const docRef = await db
+      .collection("cases")
+      .add(newCase);
 
+    // Send created case back to frontend
     res.status(201).json({
       id: docRef.id,
       ...newCase
     });
 
   } catch (error) {
-    console.error("Error creating case:", error);
+    console.error(
+      "Error creating case:",
+      error
+    );
 
     res.status(500).json({
       message: "Unable to create case",
@@ -55,7 +111,10 @@ const getCases = async (req, res) => {
     res.status(200).json(cases);
 
   } catch (error) {
-    console.error("Error fetching cases:", error);
+    console.error(
+      "Error fetching cases:",
+      error
+    );
 
     res.status(500).json({
       message: "Unable to fetch cases",

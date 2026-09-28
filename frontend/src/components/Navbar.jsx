@@ -27,7 +27,7 @@ export default function Navbar() {
             <span></span>
           </button>
 
-          <div className="cs-navbar-brand">Chain Sentry</div>
+          <div className="cs-navbar-brand">TRACEX</div>
         </div>
 
         {/* RIGHT */}

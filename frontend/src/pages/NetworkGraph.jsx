@@ -1,496 +1,2506 @@
-import React, { useEffect, useRef, useState } from "react";
-import * as d3 from "d3";
-import * as topojson from "topojson-client";
+import {
+  setWorkerUrl,
+} from "maplibre-gl";
+
+import maplibreWorker from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
+
+import MapLibre, {
+  Popup,
+  NavigationControl,
+  useControl,
+} from "react-map-gl/maplibre";
+
+import "maplibre-gl/dist/maplibre-gl.css";
+import "./NetworkGraph.css";
+
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+
+import {
+  MapboxOverlay,
+} from "@deck.gl/mapbox";
+
+import {
+  ScatterplotLayer,
+  ArcLayer,
+} from "@deck.gl/layers";
+
+import { API_BASE_URL } from "../api";
+
+setWorkerUrl(maplibreWorker);
 
 
-const DEMO_WALLET = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+/* =========================================================
+   CONFIGURATION
+========================================================= */
 
-const DEMO_TRANSACTIONS = [
-  { sender: DEMO_WALLET, receiver: "0xTornadoCashPool0000000000000000000001", amount: 100, hash: "0x8f2a11c9e4d7a3b6f0912c88de44a9b1c7e3f2a91d0c5b8e7f1a2c3d4e5f6a91" },
-  { sender: DEMO_WALLET, receiver: "0xIntermediaryHopAlpha00000000000000002", amount: 45, hash: "0x1a4b7d92e6c3f8091b5a2d7e4c9f0123456789abcdef0123456789abcdef012" },
-  { sender: "0xIntermediaryHopAlpha00000000000000002", receiver: "0xBinanceHotWallet000000000000000000003", amount: 30, hash: "0x9c8801a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f7081920a1b2c3d" },
-  { sender: DEMO_WALLET, receiver: "0xVictimProtocolContract0000000000004", amount: 12, hash: "0x3e5f6071829a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c" },
-];
+const CARTO_STYLE_URL = `https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json${
+  import.meta.env.VITE_CARTO_API_KEY
+    ? `?key=${import.meta.env.VITE_CARTO_API_KEY}`
+    : ""
+}`;
 
-// Known approximate locations for demo entities (e.g. which country an
-// exchange or mixer relay is associated with). A raw wallet address has no
-// inherent location — this only applies when you actually know something
-// about the entity behind an address (exchange HQ, server region, etc).
-// Add real entries here (or feed them from your backend) as { lat, lng, label }.
-const NODE_LOCATIONS = {
-  [DEMO_WALLET]: { lat: 40.7128, lng: -74.006, label: "New York, USA — investigated wallet (IP-linked)" },
-  "0xTornadoCashPool0000000000000000000001": { lat: 48.8566, lng: 2.3522, label: "Paris, FR — mixer relay node" },
-  "0xIntermediaryHopAlpha00000000000000002": { lat: 1.3521, lng: 103.8198, label: "Singapore — intermediary hop" },
-  "0xBinanceHotWallet000000000000000000003": { lat: 35.6895, lng: 139.6917, label: "Tokyo, JP — exchange off-ramp" },
-  "0xVictimProtocolContract0000000000004": { lat: 52.52, lng: 13.405, label: "Berlin, DE — victim protocol" },
+const DEMO_WALLET =
+  "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+
+
+/* =========================================================
+   DEMO LOCATIONS
+========================================================= */
+
+const JUNNAR_DEMO_WALLET =
+  "0x742d35Cc6634C0532925a3b844Bc454e4438f44e";
+
+const DEMO_LOCATIONS = {
+  [DEMO_WALLET.toLowerCase()]: {
+    lat: 20.5937,
+    lng: 78.9629,
+    label: "Suspect Wallet",
+    type: "wallet",
+  },
+
+  [JUNNAR_DEMO_WALLET.toLowerCase()]: {
+    lat: 19.2088,
+    lng: 73.8750,
+    label: "Junnar, Maharashtra",
+    type: "wallet",
+  },
+
+  "0xtornadocashpool0000000000000000000001": {
+    lat: 6.9271,
+    lng: 79.8612,
+    label: "Mixer Service",
+    type: "mixer",
+  },
+
+  "0xintermediaryhopalpha00000000000000002": {
+    lat: 51.1657,
+    lng: 10.4515,
+    label: "Intermediary Wallet",
+    type: "intermediary",
+  },
+
+  "0xbinancehotwallet000000000000000000003": {
+    lat: 48.8566,
+    lng: 2.3522,
+    label: "Exchange",
+    type: "exchange",
+  },
+
+  "0xvictimprotocolcontract0000000000004": {
+    lat: 52.52,
+    lng: 13.405,
+    label: "Victim Protocol",
+    type: "victim",
+  },
 };
 
-export default function NetworkGraph({ walletAddress = "" }) {
-  const graphRef = useRef(null);
-  const [transactions, setTransactions] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [isDemo, setIsDemo] = useState(false);
-  const [selectedNode, setSelectedNode] = useState(null);
 
-  const API_URL =
-    import.meta.env.VITE_API_BASE_URL || "http://localhost:5001/api";
+/* =========================================================
+   HELPERS
+========================================================= */
+
+function normalizeAddress(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase();
+}
+
+
+function shortAddress(address) {
+  if (!address) {
+    return "Unknown";
+  }
+
+  const value = String(address);
+
+  return (
+    value.slice(0, 8) +
+    "…" +
+    value.slice(-4)
+  );
+}
+
+
+function riskLevelToClass(riskLevel) {
+  const value =
+    String(riskLevel || "").toLowerCase();
+
+  if (
+    [
+      "low",
+      "medium",
+      "high",
+      "critical",
+    ].includes(value)
+  ) {
+    return `risk-${value}`;
+  }
+
+  return "risk-unknown";
+}
+
+
+function RiskBadge({ riskLevel }) {
+  if (!riskLevel) {
+    return null;
+  }
+
+  return (
+    <span
+      className={`risk-badge ${riskLevelToClass(
+        riskLevel
+      )}`}
+    >
+      {riskLevel}
+    </span>
+  );
+}
+
+
+/* =========================================================
+   TRANSACTION HELPERS
+========================================================= */
+
+function getSender(tx) {
+  return (
+    tx?.sender ||
+    tx?.from ||
+    tx?.source ||
+    ""
+  );
+}
+
+
+function getReceiver(tx) {
+  return (
+    tx?.receiver ||
+    tx?.to ||
+    tx?.destination ||
+    ""
+  );
+}
+
+
+function getHash(tx) {
+  return (
+    tx?.hash ||
+    tx?.txHash ||
+    tx?.transactionHash ||
+    tx?.id ||
+    ""
+  );
+}
+
+
+/* =========================================================
+   VASP HELPERS
+========================================================= */
+
+function normalizeVaspAddress(entry) {
+  if (!entry) {
+    return null;
+  }
+
+  if (typeof entry === "string") {
+    return {
+      address: entry,
+      lat: null,
+      lng: null,
+    };
+  }
+
+  if (typeof entry === "object") {
+    return {
+      address:
+        entry.address ||
+        entry.wallet ||
+        entry.walletAddress ||
+        entry.value ||
+        "",
+
+      lat:
+        entry.lat ??
+        entry.latitude ??
+        null,
+
+      lng:
+        entry.lng ??
+        entry.longitude ??
+        null,
+    };
+  }
+
+  return null;
+}
+
+
+function findVasp(address, vasps) {
+  const target =
+    normalizeAddress(address);
+
+  for (const vasp of vasps || []) {
+    const addresses =
+      Array.isArray(vasp.addresses)
+        ? vasp.addresses
+        : [];
+
+    for (const item of addresses) {
+      const normalized =
+        normalizeVaspAddress(item);
+
+      if (
+        normalized &&
+        normalizeAddress(
+          normalized.address
+        ) === target
+      ) {
+        return {
+          ...vasp,
+          matchedAddress: normalized,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
+
+/* =========================================================
+   ADDRESS LOCATION
+========================================================= */
+
+function getNodeLocation(
+  address,
+  vasps
+) {
+  const normalized =
+    normalizeAddress(address);
+
+  const vasp =
+    findVasp(address, vasps);
+
+  /* VASP location */
+  if (
+    vasp?.matchedAddress?.lat != null &&
+    vasp?.matchedAddress?.lng != null
+  ) {
+    return {
+      lat: Number(
+        vasp.matchedAddress.lat
+      ),
+
+      lng: Number(
+        vasp.matchedAddress.lng
+      ),
+
+      source: "vasp",
+
+      vasp,
+    };
+  }
+
+
+  /* Demo location */
+  const demo =
+    DEMO_LOCATIONS[normalized];
+
+  if (demo) {
+    return {
+      ...demo,
+      source: "demo",
+      vasp,
+    };
+  }
+
+
+  /*
+     Wallet addresses do not inherently
+     contain geographic coordinates.
+
+     Unknown addresses therefore receive
+     a stable pseudo-location only for
+     visualization.
+  */
+
+  return {
+    ...hashAddressToCoords(
+      normalized
+    ),
+
+    source: "estimated",
+
+    vasp,
+  };
+}
+
+
+/* =========================================================
+   DETERMINISTIC DEMO LOCATION
+========================================================= */
+
+function hashAddressToCoords(address) {
+  let hash = 0;
+
+  for (
+    let i = 0;
+    i < address.length;
+    i++
+  ) {
+    hash =
+      (
+        hash * 31 +
+        address.charCodeAt(i)
+      ) >>> 0;
+  }
+
+  const lat =
+    (hash % 12000) / 100 - 60;
+
+  const lng =
+    ((hash >>> 8) % 34000) / 100 - 170;
+
+  return {
+    lat,
+    lng,
+  };
+}
+
+
+/* =========================================================
+   DECK.GL OVERLAY
+========================================================= */
+
+function DeckGLOverlay(props) {
+  const overlay = useControl(
+    () =>
+      new MapboxOverlay({
+        ...props,
+        interleaved: false,
+      })
+  );
+
+  overlay.setProps(props);
+
+  return null;
+}
+
+
+/* =========================================================
+   ZOOM INFORMATION
+========================================================= */
+
+function getZoomInfo(zoom) {
+  if (zoom < 4) {
+    return {
+      level: 1,
+      title: "World View",
+      message:
+        "Zoom in to see states and regions",
+    };
+  }
+
+  if (zoom < 7) {
+    return {
+      level: 2,
+      title: "State / Region View",
+      message:
+        "Zoom in to see cities",
+    };
+  }
+
+  if (zoom < 11) {
+    return {
+      level: 3,
+      title: "City View",
+      message:
+        "Zoom in to see roads",
+    };
+  }
+
+  if (zoom < 16) {
+    return {
+      level: 4,
+      title: "Road View",
+      message:
+        "Zoom in to see buildings",
+    };
+  }
+
+  return {
+    level: 5,
+    title: "Building View",
+    message:
+      "Maximum geographic detail",
+  };
+}
+
+
+/* =========================================================
+   MAIN COMPONENT
+========================================================= */
+
+export default function NetworkGraph({
+  walletAddress: initialWalletAddress = "",
+}) {
+
+  /* -------------------------------------------------------
+     MAP REFERENCE
+  ------------------------------------------------------- */
+
+  const mapRef = useRef(null);
+
+
+  /* -------------------------------------------------------
+     STATE
+  ------------------------------------------------------- */
+
+  const [
+    walletAddress,
+    setWalletAddress,
+  ] = useState(
+    initialWalletAddress ||
+    DEMO_WALLET
+  );
+
+
+  const [
+    searchAddress,
+    setSearchAddress,
+  ] = useState(
+    initialWalletAddress ||
+    DEMO_WALLET
+  );
+
+
+  const [
+    transactions,
+    setTransactions,
+  ] = useState([]);
+
+
+  const [
+    vasps,
+    setVasps,
+  ] = useState([]);
+
+
+  const [
+    selectedNode,
+    setSelectedNode,
+  ] = useState(null);
+
+
+  const [
+    zoom,
+    setZoom,
+  ] = useState(3);
+
+
+  const [
+    loading,
+    setLoading,
+  ] = useState(false);
+
+
+  const [
+    error,
+    setError,
+  ] = useState("");
+
+
+  /* =======================================================
+     LOAD VASPs
+  ======================================================= */
 
   useEffect(() => {
-    if (!walletAddress) {
-      // No address entered yet — show example data so the graph isn't empty.
-      setIsDemo(true);
-      setSelectedNode(null);
-      setTransactions(DEMO_TRANSACTIONS);
-      return;
-    }
 
-    const fetchTransactions = async () => {
+    async function loadVASPs() {
+
       try {
-        setLoading(true);
-        setIsDemo(false);
-        setSelectedNode(null);
 
-        const response = await fetch(
-          `${API_URL}/transactions/${walletAddress}`
-        );
+        const response =
+          await fetch(
+            `${API_BASE_URL}/vasps`
+          );
+
 
         if (!response.ok) {
-          throw new Error("Failed to fetch transaction data");
+
+          throw new Error(
+            "Unable to load VASP data"
+          );
+
         }
 
-        const data = await response.json();
 
-        setTransactions(Array.isArray(data) ? data : []);
+        const data =
+          await response.json();
+
+
+        setVasps(
+          Array.isArray(data)
+            ? data
+            : []
+        );
+
       } catch (error) {
-        console.error("Network graph error:", error);
-        setTransactions([]);
-      } finally {
-        setLoading(false);
-      }
-    };
 
-    fetchTransactions();
-  }, [walletAddress, API_URL]);
+        console.error(
+          "VASP loading error:",
+          error
+        );
+
+      }
+    }
+
+
+    loadVASPs();
+
+  }, []);
+
+
+  /* =======================================================
+     LOAD TRANSACTIONS
+  ======================================================= */
 
   useEffect(() => {
-    if (!graphRef.current) return;
 
-    let isCancelled = false;
-    let simulation;
+    async function loadTransactions() {
 
-    graphRef.current.innerHTML = "";
+      if (!walletAddress) {
 
-    const width = 900;
-    const height = 500;
-
-    const svg = d3
-      .select(graphRef.current)
-      .append("svg")
-      .attr("viewBox", `0 0 ${width} ${height}`)
-      .attr("width", "100%")
-      .attr("height", "500");
-
-    // Base background
-    svg
-      .append("rect")
-      .attr("width", width)
-      .attr("height", height)
-      .attr("fill", "#050b12");
-
-    // Shared projection — used both for the land shapes and for pinning
-    // any node that has a known real-world location.
-    const projection = d3
-      .geoMercator()
-      .scale(width / 6.5)
-      .translate([width / 2, height / 1.6]);
-
-    // World map backdrop (decorative — wallet addresses have no real
-    // geographic location by themselves; only entities we specifically
-    // know something about, via NODE_LOCATIONS, get pinned on the map).
-    d3.json("https://cdn.jsdelivr.net/npm/world-atlas@2/land-110m.json")
-      .then((worldData) => {
-        if (isCancelled) return;
-
-        const land = topojson.feature(worldData, worldData.objects.land);
-        const path = d3.geoPath().projection(projection);
-
-        svg
-          .append("path")
-          .datum(land)
-          .attr("d", path)
-          .attr("fill", "#0d1b2a")
-          .attr("stroke", "#00f0ff")
-          .attr("stroke-width", 0.5)
-          .attr("stroke-opacity", 0.35);
-      })
-      .catch((err) => {
-        console.error("World map failed to load:", err);
-      })
-      .finally(() => {
-        if (!isCancelled) drawGraphLayer();
-      });
-
-    function drawGraphLayer() {
-      if (!transactions.length) {
-        svg
-          .append("text")
-          .attr("x", width / 2)
-          .attr("y", height / 2)
-          .attr("text-anchor", "middle")
-          .attr("fill", "#8fa6b5")
-          .text(
-            walletAddress
-              ? "No transaction relationships found"
-              : "Enter a wallet address to generate the network graph"
-          );
+        setTransactions([]);
 
         return;
       }
 
-      const nodesMap = new Map();
-      const links = [];
 
-      transactions.forEach((tx) => {
-        const sender = tx.sender || tx.from;
-        const receiver = tx.receiver || tx.to;
+      try {
 
-        if (!sender || !receiver) return;
+        setLoading(true);
 
-        if (!nodesMap.has(sender)) {
-          nodesMap.set(sender, {
-            id: sender,
-            type: sender === (walletAddress || DEMO_WALLET) ? "investigated" : "wallet",
-            location: NODE_LOCATIONS[sender] || null,
-          });
+        setError("");
+
+
+        const response =
+          await fetch(
+            `${API_BASE_URL}/transactions/${walletAddress}`
+          );
+
+
+        if (!response.ok) {
+
+          throw new Error(
+            "Unable to fetch transactions"
+          );
+
         }
 
-        if (!nodesMap.has(receiver)) {
-          nodesMap.set(receiver, {
-            id: receiver,
-            type: receiver === (walletAddress || DEMO_WALLET) ? "investigated" : "wallet",
-            location: NODE_LOCATIONS[receiver] || null,
-          });
+
+        const data =
+          await response.json();
+
+
+        if (Array.isArray(data)) {
+
+          setTransactions(data);
+
+        } else {
+
+          setTransactions(
+            Array.isArray(
+              data.transactions
+            )
+              ? data.transactions
+              : []
+          );
+
         }
 
-        links.push({
-          source: sender,
-          target: receiver,
-          amount: tx.amount || 0,
-          hash: tx.hash || tx.txHash || tx.transactionHash || "unknown",
-        });
-      });
+      } catch (error) {
 
-      const nodes = Array.from(nodesMap.values());
-
-      // Pin any node with a known real-world location to its actual map
-      // position, so it doesn't drift with the force simulation.
-      nodes.forEach((d) => {
-        if (d.location) {
-          const [x, y] = projection([d.location.lng, d.location.lat]);
-          d.fx = x;
-          d.fy = y;
-        }
-      });
-
-      simulation = d3
-        .forceSimulation(nodes)
-        .force(
-          "link",
-          d3
-            .forceLink(links)
-            .id((d) => d.id)
-            .distance(140)
-        )
-        .force("charge", d3.forceManyBody().strength(-400))
-        .force("center", d3.forceCenter(width / 2, height / 2));
-
-      const link = svg
-        .append("g")
-        .selectAll("line")
-        .data(links)
-        .join("line")
-        .attr("stroke", "#3a5363")
-        .attr("stroke-width", 2);
-
-      const node = svg
-        .append("g")
-        .selectAll("g")
-        .data(nodes)
-        .join("g")
-        .style("cursor", "pointer")
-        .on("click", (event, d) => setSelectedNode(d.id))
-        .call(
-          d3
-            .drag()
-            .on("start", dragStarted)
-            .on("drag", dragged)
-            .on("end", dragEnded)
+        console.error(
+          "Transaction loading error:",
+          error
         );
 
-      node
-        .append("circle")
-        .attr("r", (d) => (d.type === "investigated" ? 14 : 9))
-        .attr("fill", (d) =>
-          d.type === "investigated" ? "#e24b4a" : "#3ea36f"
-        )
-        .attr("stroke", (d) => (d.id === selectedNode ? "#00f0ff" : "none"))
-        .attr("stroke-width", 2.5)
-        .attr("filter", "drop-shadow(0 0 4px rgba(0,240,255,0.5))");
 
-      node
-        .append("text")
-        .text((d) => `${d.id.slice(0, 8)}...`)
-        .attr("x", 14)
-        .attr("y", 4)
-        .attr("fill", "#d6e0e6")
-        .attr("font-size", "11px");
+        setError(
+          "Unable to load transactions. Check that the API server is running."
+        );
 
-      node
-        .filter((d) => !!d.location)
-        .append("text")
-        .text((d) => d.location.label.split(" — ")[0])
-        .attr("x", 14)
-        .attr("y", 18)
-        .attr("fill", "#5d8aa8")
-        .attr("font-size", "9px");
 
-      simulation.on("tick", () => {
-        link
-          .attr("x1", (d) => d.source.x)
-          .attr("y1", (d) => d.source.y)
-          .attr("x2", (d) => d.target.x)
-          .attr("y2", (d) => d.target.y);
+        setTransactions([]);
 
-        node.attr("transform", (d) => `translate(${d.x},${d.y})`);
+      } finally {
+
+        setLoading(false);
+
+      }
+
+    }
+
+
+    loadTransactions();
+
+  }, [walletAddress]);
+
+
+  /* =======================================================
+     INVESTIGATE WALLET
+  ======================================================= */
+
+  const handleInvestigate = () => {
+
+    const address =
+      searchAddress.trim();
+
+
+    if (!address) {
+
+      alert(
+        "Please enter a wallet address."
+      );
+
+      return;
+    }
+
+
+    setWalletAddress(address);
+
+    setSelectedNode(null);
+  };
+
+
+  /* =======================================================
+     BUILD NODES
+  ======================================================= */
+
+  const nodes = useMemo(() => {
+
+    const nodeMap =
+      new Map();
+
+
+    transactions.forEach((tx) => {
+
+      const sender =
+        getSender(tx);
+
+      const receiver =
+        getReceiver(tx);
+
+
+      [
+        sender,
+        receiver,
+      ].forEach((address) => {
+
+        if (!address) {
+          return;
+        }
+
+
+        const normalized =
+          normalizeAddress(address);
+
+
+        if (
+          nodeMap.has(normalized)
+        ) {
+          return;
+        }
+
+
+        const location =
+          getNodeLocation(
+            address,
+            vasps
+          );
+
+
+        if (!location) {
+          return;
+        }
+
+
+        let type =
+          "wallet";
+
+
+        if (location.vasp) {
+
+          type =
+            "exchange";
+
+        } else if (
+          normalized.includes(
+            "tornado"
+          ) ||
+          normalized.includes(
+            "mixer"
+          )
+        ) {
+
+          type =
+            "mixer";
+
+        } else if (
+          normalized.includes(
+            "victim"
+          )
+        ) {
+
+          type =
+            "victim";
+
+        } else if (
+          normalized.includes(
+            "intermediary"
+          )
+        ) {
+
+          type =
+            "intermediary";
+
+        }
+
+
+        nodeMap.set(
+          normalized,
+          {
+            id: normalized,
+
+            address,
+
+            lat:
+              location.lat,
+
+            lng:
+              location.lng,
+
+            type,
+
+            vasp:
+              location.vasp,
+
+            source:
+              location.source,
+          }
+        );
+
       });
 
-      function dragStarted(event, d) {
-        if (!event.active) simulation.alphaTarget(0.3).restart();
-        d.fx = d.x;
-        d.fy = d.y;
-      }
+    });
 
-      function dragged(event, d) {
-        d.fx = event.x;
-        d.fy = event.y;
-      }
 
-      function dragEnded(event, d) {
-        if (!event.active) simulation.alphaTarget(0);
-        d.fx = null;
-        d.fy = null;
+    /* -----------------------------------------------------
+       Always show investigated wallet
+    ----------------------------------------------------- */
+
+    if (walletAddress) {
+
+      const normalized =
+        normalizeAddress(
+          walletAddress
+        );
+
+
+      if (
+        !nodeMap.has(normalized)
+      ) {
+
+        const location =
+          getNodeLocation(
+            walletAddress,
+            vasps
+          );
+
+
+        if (location) {
+
+          nodeMap.set(
+            normalized,
+            {
+              id: normalized,
+
+              address:
+                walletAddress,
+
+              lat:
+                location.lat,
+
+              lng:
+                location.lng,
+
+              type: "wallet",
+
+              vasp:
+                location.vasp,
+
+              source:
+                location.source,
+            }
+          );
+
+        }
       }
     }
 
-    return () => {
-      isCancelled = true;
-      if (simulation) simulation.stop();
-    };
-  }, [transactions, walletAddress, selectedNode]);
 
-  const relatedTransactions = selectedNode
-    ? transactions.filter((tx) => {
-        const sender = tx.sender || tx.from;
-        const receiver = tx.receiver || tx.to;
-        return sender === selectedNode || receiver === selectedNode;
+    return Array.from(
+      nodeMap.values()
+    );
+
+  }, [
+    transactions,
+    vasps,
+    walletAddress,
+  ]);
+
+
+  /* =======================================================
+     BUILD TRANSACTION PATHS
+  ======================================================= */
+
+  const paths = useMemo(() => {
+
+    return transactions
+      .map((tx) => {
+
+        const sender =
+          getSender(tx);
+
+        const receiver =
+          getReceiver(tx);
+
+
+        const senderNode =
+          nodes.find(
+            (node) =>
+              node.id ===
+              normalizeAddress(
+                sender
+              )
+          );
+
+
+        const receiverNode =
+          nodes.find(
+            (node) =>
+              node.id ===
+              normalizeAddress(
+                receiver
+              )
+          );
+
+
+        if (
+          !senderNode ||
+          !receiverNode
+        ) {
+          return null;
+        }
+
+
+        return {
+
+          id:
+            getHash(tx) ||
+            `${sender}-${receiver}`,
+
+          positions: [
+
+            [
+              senderNode.lat,
+              senderNode.lng,
+            ],
+
+            [
+              receiverNode.lat,
+              receiverNode.lng,
+            ],
+
+          ],
+
+          transaction:
+            tx,
+        };
+
       })
-    : [];
+
+      .filter(Boolean);
+
+  }, [
+    transactions,
+    nodes,
+  ]);
+
+
+  /* =======================================================
+     CONVERT PATHS FOR DECK.GL
+
+     Existing paths:
+     [latitude, longitude]
+
+     deck.gl:
+     [longitude, latitude]
+  ======================================================= */
+
+  const deckPaths = useMemo(() => {
+
+    return paths
+
+      .filter(
+        (path) =>
+          path.positions &&
+          path.positions.length >= 2
+      )
+
+      .map((path) => {
+
+        const start =
+          path.positions[0];
+
+        const end =
+          path.positions[
+            path.positions.length - 1
+          ];
+
+
+        return {
+
+          id:
+            path.id,
+
+          sourcePosition: [
+            start[1],
+            start[0],
+          ],
+
+          targetPosition: [
+            end[1],
+            end[0],
+          ],
+
+          transaction:
+            path.transaction,
+        };
+
+      });
+
+  }, [paths]);
+
+
+  /* =======================================================
+     TRANSACTION ARC LAYER
+
+     ONE layer only.
+
+     This prevents the duplicated/double strings
+     that were happening when multiple ArcLayers
+     rendered the same transactions.
+  ======================================================= */
+
+  const arcLayer = useMemo(() => {
+
+    return new ArcLayer({
+
+      id:
+        "transaction-arcs",
+
+      data:
+        deckPaths,
+
+
+      getSourcePosition:
+        (d) =>
+          d.sourcePosition,
+
+
+      getTargetPosition:
+        (d) =>
+          d.targetPosition,
+
+
+      getSourceColor:
+        [34, 211, 238, 220],
+
+
+      getTargetColor:
+        [255, 107, 107, 220],
+
+
+      getWidth:
+        1.5,
+
+
+      widthUnits:
+        "pixels",
+
+
+      widthMinPixels:
+        1,
+
+
+      widthMaxPixels:
+        2,
+
+
+      /*
+        Keep the transaction path flat.
+
+        greatCircle false:
+        direct projected connection.
+
+        getHeight 0:
+        no raised/3D arc.
+      */
+
+      greatCircle:
+        false,
+
+
+      getHeight:
+        0,
+
+
+      pickable:
+        true,
+
+
+      parameters: {
+        depthTest:
+          false,
+      },
+
+    });
+
+  }, [deckPaths]);
+
+
+  /* =======================================================
+     NETWORK NODES
+
+     ONE node layer only.
+  ======================================================= */
+
+  const nodeLayer = useMemo(() => {
+
+    return new ScatterplotLayer({
+
+      id:
+        "transaction-nodes",
+
+
+      data:
+        nodes,
+
+
+      /*
+        deck.gl expects:
+        [longitude, latitude]
+      */
+
+      getPosition:
+        (d) => [
+          d.lng,
+          d.lat,
+        ],
+
+
+      /* Small screen-based nodes */
+
+      radiusUnits:
+        "pixels",
+
+
+      radiusMinPixels:
+        2,
+
+
+      radiusMaxPixels:
+        10,
+
+
+      getRadius:
+        (d) => {
+
+          /* Main wallet */
+
+          if (
+            d.id ===
+            normalizeAddress(
+              walletAddress
+            )
+          ) {
+            return 7;
+          }
+
+
+          /* Exchange */
+
+          if (
+            d.type ===
+            "exchange"
+          ) {
+            return 4;
+          }
+
+
+          /* Mixer */
+
+          if (
+            d.type ===
+            "mixer"
+          ) {
+            return 4;
+          }
+
+
+          /* Normal node */
+
+          return 3;
+        },
+
+
+      /*
+        Keep your existing colors.
+      */
+
+      getFillColor:
+        (d) => {
+
+          /* Main wallet */
+
+          if (
+            d.id ===
+            normalizeAddress(
+              walletAddress
+            )
+          ) {
+            return [
+              255,
+              79,
+              94,
+              255,
+            ];
+          }
+
+
+          /* Exchange */
+
+          if (
+            d.type ===
+            "exchange"
+          ) {
+            return [
+              107,
+              220,
+              156,
+              255,
+            ];
+          }
+
+
+          /* Mixer */
+
+          if (
+            d.type ===
+            "mixer"
+          ) {
+            return [
+              232,
+              92,
+              115,
+              255,
+            ];
+          }
+
+
+          /* Victim */
+
+          if (
+            d.type ===
+            "victim"
+          ) {
+            return [
+              74,
+              168,
+              255,
+              255,
+            ];
+          }
+
+
+          /* Intermediary */
+
+          if (
+            d.type ===
+            "intermediary"
+          ) {
+            return [
+              245,
+              196,
+              83,
+              255,
+            ];
+          }
+
+
+          /* Normal */
+
+          return [
+            34,
+            211,
+            238,
+            255,
+          ];
+        },
+
+
+      stroked:
+        true,
+
+
+      getLineColor:
+        [
+          255,
+          255,
+          255,
+          150,
+        ],
+
+
+      getLineWidth:
+        1,
+
+
+      lineWidthUnits:
+        "pixels",
+
+
+      lineWidthMinPixels:
+        0.5,
+
+
+      lineWidthMaxPixels:
+        1,
+
+
+      filled:
+        true,
+
+
+      pickable:
+        true,
+
+
+      autoHighlight:
+        false,
+
+
+      onClick:
+        ({ object }) => {
+
+          if (object) {
+
+            setSelectedNode(
+              object
+            );
+
+          }
+
+        },
+
+    });
+
+  }, [
+    nodes,
+    walletAddress,
+  ]);
+
+
+  /* =======================================================
+     ALL DECK.GL LAYERS
+
+     ONLY ONE array.
+  ======================================================= */
+
+  const deckLayers = useMemo(() => {
+
+    return [
+      arcLayer,
+      nodeLayer,
+    ];
+
+  }, [
+    arcLayer,
+    nodeLayer,
+  ]);
+
+
+  /* =======================================================
+     ZOOM INFORMATION
+
+     ONLY ONE declaration.
+  ======================================================= */
+
+  const zoomInfo =
+    getZoomInfo(zoom);
+
+
+  /* =======================================================
+     SELECTED NODE → MOVE MAP
+
+     ONLY ONE effect.
+  ======================================================= */
+
+  useEffect(() => {
+
+    if (!selectedNode) {
+      return;
+    }
+
+
+    const map =
+      mapRef.current?.getMap();
+
+
+    if (!map) {
+      return;
+    }
+
+
+    map.easeTo({
+
+      center: [
+        selectedNode.lng,
+        selectedNode.lat,
+      ],
+
+      zoom:
+        Math.max(
+          map.getZoom(),
+          7
+        ),
+
+      duration:
+        1200,
+
+    });
+
+  }, [
+    selectedNode,
+  ]);
+
+
+  /* =======================================================
+     ZOOM CONTROLS
+  ======================================================= */
+
+  const zoomIn = () => {
+
+    const map =
+      mapRef.current?.getMap();
+
+
+    if (map) {
+      map.zoomIn();
+    }
+
+  };
+
+
+  const zoomOut = () => {
+
+    const map =
+      mapRef.current?.getMap();
+
+
+    if (map) {
+      map.zoomOut();
+    }
+
+  };
+
+
+  const zoomNext = () => {
+
+    const map =
+      mapRef.current?.getMap();
+
+
+    if (!map) {
+      return;
+    }
+
+
+    map.easeTo({
+
+      zoom:
+        Math.min(
+          map.getZoom() + 4,
+          18
+        ),
+
+      duration:
+        700,
+
+    });
+
+  };
+
+
+  /* =======================================================
+     SELECTED NODE VASP LINKS
+  ======================================================= */
+
+  const selectedVaspLinks =
+    Array.isArray(
+      selectedNode?.vasp?.addresses
+    )
+      ? selectedNode.vasp.addresses.length
+      : null;
+
+
+  /* =======================================================
+     RENDER
+  ======================================================= */
 
   return (
-    <div
-      style={{
-        padding: "2rem",
-        minHeight: "100vh",
-        background: "#050b12",
-        color: "#ffffff",
-        boxSizing: "border-box",
-      }}
-    >
-      <div
-        style={{
-          maxWidth: "1100px",
-          margin: "0 auto",
-        }}
-      >
-        <h1
-          style={{
-            margin: "0 0 8px",
-            fontSize: "28px",
-          }}
-        >
-          Blockchain Network Graph
-        </h1>
 
-        <p
-          style={{
-            margin: "0 0 25px",
-            color: "#8fa6b5",
-          }}
-        >
-          Visualize wallet-to-wallet transaction relationships
-          during fraud investigation.
-        </p>
+    <div className="network-page">
 
-        <div
-          style={{
-            background: "#07131d",
-            border: "1px solid #173447",
-            borderRadius: "12px",
-            padding: "20px",
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              gap: "10px",
-              marginBottom: "20px",
-              flexWrap: "wrap",
-            }}
-          >
-            <input
-              type="text"
-              placeholder="Enter suspect wallet address"
-              value={walletAddress}
-              readOnly
-              style={{
-                flex: 1,
-                minWidth: "280px",
-                padding: "12px",
-                background: "#050b12",
-                border: "1px solid #173447",
-                borderRadius: "7px",
-                color: "#ffffff",
-              }}
-            />
+
+      {/* =================================================
+          HEADER
+      ================================================= */}
+
+      <div className="network-header">
+
+        <div>
+
+          <div className="network-eyebrow">
+            BLOCKCHAIN INTELLIGENCE
           </div>
 
-          {loading && (
-            <p style={{ color: "#8fa6b5" }}>
-              Loading blockchain transactions...
-            </p>
-          )}
 
-          {isDemo && (
-            <p style={{ color: "#f5c453", fontSize: "12px", marginBottom: "10px" }}>
-              Showing example data — enter a real wallet address to search actual transactions.
-            </p>
-          )}
+          <h1>
+            Network Graph
+          </h1>
 
-          <div
-            ref={graphRef}
-            style={{
-              width: "100%",
-              minHeight: "500px",
-              background: "#050b12",
-              borderRadius: "8px",
-              overflow: "hidden",
+
+          <p>
+            Visualize transaction flows,
+            intermediary wallets and VASP
+            relationships across geographic
+            locations.
+          </p>
+
+        </div>
+
+
+        <div className="network-level">
+
+          <span className="network-level-number">
+            {zoomInfo.level}
+          </span>
+
+
+          <div>
+
+            <strong>
+              {zoomInfo.title}
+            </strong>
+
+
+            <small>
+              {zoomInfo.message}
+            </small>
+
+          </div>
+
+        </div>
+
+      </div>
+
+
+      {/* =================================================
+          MAIN GRAPH PANEL
+      ================================================= */}
+
+      <div className="network-panel">
+
+
+        {/* =================================================
+            SEARCH
+        ================================================= */}
+
+        <div className="network-search">
+
+          <input
+            id="suspectWalletAddress"
+            name="suspectWalletAddress"
+            type="text"
+
+            value={
+              searchAddress
+            }
+
+            onChange={(event) =>
+              setSearchAddress(
+                event.target.value
+              )
+            }
+
+            onKeyDown={(event) => {
+
+              if (
+                event.key ===
+                "Enter"
+              ) {
+
+                handleInvestigate();
+
+              }
+
             }}
+
+            placeholder="Enter suspect wallet address"
           />
 
-          {selectedNode && (
-            <div
-              style={{
-                marginTop: "16px",
-                background: "#050b12",
-                border: "1px solid #173447",
-                borderRadius: "10px",
-                padding: "16px 18px",
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "flex-start",
-                  gap: "12px",
-                  marginBottom: "12px",
-                }}
+
+          <button
+            onClick={
+              handleInvestigate
+            }
+          >
+            Investigate
+          </button>
+
+        </div>
+
+
+        {/* =================================================
+            LOADING
+        ================================================= */}
+
+        {loading && (
+
+          <div className="network-loading">
+
+            Loading blockchain
+            transaction data...
+
+          </div>
+
+        )}
+
+
+        {/* =================================================
+            ERROR
+        ================================================= */}
+
+        {error && (
+
+          <div className="network-error">
+
+            {error}
+
+          </div>
+
+        )}
+
+
+        {/* =================================================
+            MAP
+        ================================================= */}
+
+        <div className="network-map-container">
+
+          <MapLibre
+
+            ref={mapRef}
+
+            mapStyle={
+              CARTO_STYLE_URL
+            }
+
+
+            onLoad={(event) => {
+
+              const map =
+                event.target;
+
+
+              const layers =
+                map.getStyle()
+                  .layers || [];
+
+
+              /* =================================================
+                 REFERENCE MAP COLORS
+
+                 Only the MapLibre base map is adjusted here.
+
+                 Dashboard/CSS colors are untouched.
+              ================================================= */
+
+              layers.forEach(
+                (layer) => {
+
+                  const id =
+                    String(
+                      layer.id || ""
+                    ).toLowerCase();
+
+
+                  const sourceLayer =
+                    String(
+                      layer[
+                        "source-layer"
+                      ] || ""
+                    ).toLowerCase();
+
+
+                  try {
+
+                    /* -----------------------------------------
+                       Deep navy background
+                    ----------------------------------------- */
+
+                    if (
+                      layer.type ===
+                      "background"
+                    ) {
+
+                      map.setPaintProperty(
+                        layer.id,
+                        "background-color",
+                        "#01050A"
+                      );
+
+                      return;
+                    }
+
+
+                    /* -----------------------------------------
+                       Dark blue water
+                    ----------------------------------------- */
+
+                    if (
+                      layer.type ===
+                        "fill" &&
+                      (
+                        sourceLayer.includes(
+                          "water"
+                        ) ||
+                        id.includes(
+                          "water"
+                        )
+                      )
+                    ) {
+
+                      map.setPaintProperty(
+                        layer.id,
+                        "fill-color",
+                        "#061827"
+                      );
+
+
+                      map.setPaintProperty(
+                        layer.id,
+                        "fill-opacity",
+                        1
+                      );
+
+
+                      return;
+                    }
+
+
+                    /* -----------------------------------------
+                       Dark blue land
+                    ----------------------------------------- */
+
+                    if (
+                      layer.type ===
+                        "fill" &&
+                      (
+                        sourceLayer.includes(
+                          "land"
+                        ) ||
+                        sourceLayer.includes(
+                          "landcover"
+                        ) ||
+                        sourceLayer.includes(
+                          "landuse"
+                        ) ||
+                        sourceLayer.includes(
+                          "natural"
+                        ) ||
+                        sourceLayer.includes(
+                          "park"
+                        ) ||
+                        id.includes(
+                          "land"
+                        ) ||
+                        id.includes(
+                          "landcover"
+                        ) ||
+                        id.includes(
+                          "landuse"
+                        )
+                      )
+                    ) {
+
+                      map.setPaintProperty(
+                        layer.id,
+                        "fill-color",
+                        "#0A2133"
+                      );
+
+
+                      map.setPaintProperty(
+                        layer.id,
+                        "fill-opacity",
+                        0.88
+                      );
+
+
+                      return;
+                    }
+
+
+                    /* -----------------------------------------
+                       Subtle blue roads
+                    ----------------------------------------- */
+
+                    if (
+                      layer.type ===
+                        "line" &&
+                      (
+                        sourceLayer.includes(
+                          "road"
+                        ) ||
+                        sourceLayer.includes(
+                          "transport"
+                        ) ||
+                        id.includes(
+                          "road"
+                        ) ||
+                        id.includes(
+                          "transport"
+                        )
+                      )
+                    ) {
+
+                      map.setPaintProperty(
+                        layer.id,
+                        "line-color",
+                        "#0A3047"
+                      );
+
+
+                      map.setPaintProperty(
+                        layer.id,
+                        "line-opacity",
+                        0.42
+                      );
+
+
+                      return;
+                    }
+
+
+                    /* -----------------------------------------
+                       Cyan boundaries
+                    ----------------------------------------- */
+
+                    if (
+                      layer.type ===
+                        "line" &&
+                      (
+                        sourceLayer.includes(
+                          "boundary"
+                        ) ||
+                        sourceLayer.includes(
+                          "admin"
+                        ) ||
+                        id.includes(
+                          "boundary"
+                        ) ||
+                        id.includes(
+                          "admin"
+                        ) ||
+                        id.includes(
+                          "border"
+                        )
+                      )
+                    ) {
+
+                      map.setPaintProperty(
+                        layer.id,
+                        "line-color",
+                        "#087DBA"
+                      );
+
+
+                      map.setPaintProperty(
+                        layer.id,
+                        "line-opacity",
+                        0.62
+                      );
+
+
+                      map.setPaintProperty(
+                        layer.id,
+                        "line-width",
+                        0.7
+                      );
+
+
+                      return;
+                    }
+
+
+                    /* -----------------------------------------
+                       Cyan geographic labels
+                    ----------------------------------------- */
+
+                    if (
+                      layer.type ===
+                        "symbol" &&
+                      layer.layout &&
+                      layer.layout[
+                        "text-field"
+                      ] &&
+                      (
+                        sourceLayer.includes(
+                          "place"
+                        ) ||
+                        sourceLayer.includes(
+                          "country"
+                        ) ||
+                        sourceLayer.includes(
+                          "admin"
+                        ) ||
+                        id.includes(
+                          "place"
+                        ) ||
+                        id.includes(
+                          "country"
+                        ) ||
+                        id.includes(
+                          "label"
+                        )
+                      )
+                    ) {
+
+                      map.setPaintProperty(
+                        layer.id,
+                        "text-color",
+                        "#46BDEB"
+                      );
+
+
+                      map.setPaintProperty(
+                        layer.id,
+                        "text-halo-color",
+                        "#00121E"
+                      );
+
+
+                      map.setPaintProperty(
+                        layer.id,
+                        "text-halo-width",
+                        1
+                      );
+
+
+                      map.setPaintProperty(
+                        layer.id,
+                        "text-opacity",
+                        0.82
+                      );
+
+                    }
+
+
+                    /* -----------------------------------------
+                       Subtle 3D buildings
+                    ----------------------------------------- */
+
+                    if (
+                      layer.type ===
+                      "fill-extrusion"
+                    ) {
+
+                      map.setPaintProperty(
+                        layer.id,
+                        "fill-extrusion-color",
+                        "#08304A"
+                      );
+
+
+                      map.setPaintProperty(
+                        layer.id,
+                        "fill-extrusion-opacity",
+                        0.55
+                      );
+
+                    }
+
+                  } catch (error) {
+
+                    /*
+                      Ignore individual CARTO layers
+                      whose paint properties cannot be
+                      modified after load.
+                    */
+
+                  }
+
+                }
+              );
+
+            }}
+
+
+            workerUrl={
+              maplibreWorker
+            }
+
+
+            initialViewState={{
+              longitude: 20,
+              latitude: 20,
+              zoom: 2,
+              pitch: 35,
+              bearing: 0,
+            }}
+
+
+            minZoom={2}
+
+            maxZoom={19}
+
+
+            style={{
+              width: "100%",
+              height: "600px",
+            }}
+
+
+            onMove={(event) => {
+
+              setZoom(
+                event.viewState.zoom
+              );
+
+            }}
+
+          >
+
+
+            {/* =========================================
+                MAP CONTROLS
+            ========================================= */}
+
+            <NavigationControl
+
+              position="top-left"
+
+              showCompass={
+                true
+              }
+
+              showZoom={
+                true
+              }
+
+            />
+
+
+            {/* =========================================
+                DECK.GL
+            ========================================= */}
+
+            <DeckGLOverlay
+              layers={
+                deckLayers
+              }
+            />
+
+
+            {/* =========================================
+                POPUP
+            ========================================= */}
+
+            {selectedNode && (
+
+              <Popup
+
+                longitude={
+                  selectedNode.lng
+                }
+
+                latitude={
+                  selectedNode.lat
+                }
+
+                closeButton={
+                  true
+                }
+
+                closeOnClick={
+                  false
+                }
+
+                onClose={() =>
+                  setSelectedNode(
+                    null
+                  )
+                }
+
+                anchor="bottom"
+
               >
-                <div>
-                  <p style={{ margin: 0, fontSize: "11px", color: "#8fa6b5", textTransform: "uppercase", letterSpacing: "0.5px" }}>
-                    Selected wallet
-                  </p>
-                  <p style={{ margin: "4px 0 0", fontFamily: "monospace", fontSize: "13px", wordBreak: "break-all" }}>
-                    {selectedNode}
-                  </p>
-                </div>
-                <span
-                  style={{
-                    fontSize: "10px",
-                    fontWeight: "bold",
-                    padding: "4px 10px",
-                    borderRadius: "999px",
-                    whiteSpace: "nowrap",
-                    background: selectedNode === (walletAddress || DEMO_WALLET) ? "rgba(226,75,74,0.15)" : "rgba(62,163,111,0.15)",
-                    color: selectedNode === (walletAddress || DEMO_WALLET) ? "#e24b4a" : "#3ea36f",
-                  }}
-                >
-                  {selectedNode === (walletAddress || DEMO_WALLET) ? "Investigated" : "Connected"}
-                </span>
-              </div>
 
-              {NODE_LOCATIONS[selectedNode] && (
-                <p style={{ margin: "0 0 12px", fontSize: "12px", color: "#5d8aa8" }}>
-                  📍 {NODE_LOCATIONS[selectedNode].label}
-                </p>
-              )}
+                <div className="map-popup">
 
-              <p style={{ margin: "0 0 8px", fontSize: "11px", color: "#8fa6b5", textTransform: "uppercase", letterSpacing: "0.5px" }}>
-                Related transactions ({relatedTransactions.length})
-              </p>
 
-              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                {relatedTransactions.map((tx, i) => {
-                  const sender = tx.sender || tx.from;
-                  const receiver = tx.receiver || tx.to;
-                  const isOutgoing = sender === selectedNode;
+                  <span className="popup-title">
 
-                  return (
-                    <div
-                      key={i}
-                      style={{
-                        background: "#07131d",
-                        border: "1px solid #173447",
-                        borderRadius: "8px",
-                        padding: "10px 12px",
-                        fontSize: "12px",
-                        fontFamily: "monospace",
-                      }}
-                    >
-                      <div style={{ display: "flex", justifyContent: "space-between", color: "#8fa6b5", marginBottom: "4px" }}>
-                        <span>{isOutgoing ? "Sent" : "Received"}</span>
-                        <span>{tx.amount} {tx.currency || "ETH"}</span>
-                      </div>
-                      <div style={{ color: "#d6e0e6", wordBreak: "break-all" }}>
-                        Tx hash: {tx.hash || tx.txHash || tx.transactionHash || "unavailable"}
-                      </div>
-                      <div style={{ color: "#5d7086", marginTop: "2px", wordBreak: "break-all" }}>
-                        {isOutgoing ? "To: " : "From: "}
-                        {isOutgoing ? receiver : sender}
-                      </div>
+                    {
+                      selectedNode.vasp?.name ||
+                      selectedNode.type ||
+                      "Blockchain Address"
+                    }
+
+                  </span>
+
+
+                  <div className="popup-address">
+
+                    {shortAddress(
+                      selectedNode.address
+                    )}
+
+                  </div>
+
+
+                  {selectedNode.source ===
+                    "estimated" && (
+
+                    <div className="popup-estimated-note">
+
+                      Location estimated —
+                      not a verified address
+
                     </div>
-                  );
-                })}
-              </div>
+
+                  )}
+
+
+                  <div className="popup-row">
+
+                    <span className="popup-row-label">
+                      Type
+                    </span>
+
+
+                    <span className="popup-row-value">
+
+                      {
+                        selectedNode.vasp?.type ||
+                        selectedNode.type ||
+                        "Wallet"
+                      }
+
+                    </span>
+
+                  </div>
+
+
+                  {selectedNode.vasp?.country && (
+
+                    <div className="popup-row">
+
+                      <span className="popup-row-label">
+                        Country
+                      </span>
+
+
+                      <span className="popup-row-value">
+
+                        {
+                          selectedNode.vasp.country
+                        }
+
+                      </span>
+
+                    </div>
+
+                  )}
+
+
+                  {selectedNode.vasp?.riskLevel && (
+
+                    <div className="popup-row">
+
+                      <span className="popup-row-label">
+                        Risk Level
+                      </span>
+
+
+                      <RiskBadge
+                        riskLevel={
+                          selectedNode.vasp
+                            .riskLevel
+                        }
+                      />
+
+                    </div>
+
+                  )}
+
+
+                  {selectedVaspLinks != null && (
+
+                    <div className="popup-row">
+
+                      <span className="popup-row-label">
+                        VASP Links
+                      </span>
+
+
+                      <span className="popup-row-value">
+
+                        {
+                          selectedVaspLinks
+                        }
+
+                      </span>
+
+                    </div>
+
+                  )}
+
+                </div>
+
+              </Popup>
+
+            )}
+
+          </MapLibre>
+
+
+          {/* =================================================
+              LEVEL INDICATOR
+          ================================================= */}
+
+          <div className="network-map-top">
+
+            <div className="map-level-badge">
+
+              <span>
+                LEVEL {zoomInfo.level}
+              </span>
+
+
+              <strong>
+                {zoomInfo.title}
+              </strong>
+
             </div>
-          )}
+
+          </div>
+
+
+          {/* =================================================
+              CUSTOM ZOOM CONTROLS
+          ================================================= */}
+
+          <div className="network-custom-controls">
+
+            <button
+              onClick={
+                zoomIn
+              }
+              title="Zoom in"
+            >
+              +
+            </button>
+
+
+            <button
+              onClick={
+                zoomOut
+              }
+              title="Zoom out"
+            >
+              −
+            </button>
+
+
+            <button
+              onClick={
+                zoomNext
+              }
+              title="Next geographic level"
+            >
+              ◎
+            </button>
+
+          </div>
+
+
+          {/* =================================================
+              LEGEND
+          ================================================= */}
+
+          <div className="network-legend">
+
+            <div className="legend-title">
+              INVESTIGATION LAYERS
+            </div>
+
+
+            <div>
+
+              <span className="legend-dot suspicious"></span>
+
+              Suspicious Address
+
+            </div>
+
+
+            <div>
+
+              <span className="legend-dot vasp"></span>
+
+              VASP / Exchange
+
+            </div>
+
+
+            <div>
+
+              <span className="legend-dot path"></span>
+
+              Transaction Path
+
+            </div>
+
+
+            <div>
+
+              <span className="legend-dot estimated"></span>
+
+              Estimated location
+
+            </div>
+
+          </div>
+
+
+          {/* =================================================
+              NEXT LEVEL
+          ================================================= */}
+
+          <button
+
+            className="network-next-level"
+
+            onClick={
+              zoomNext
+            }
+
+          >
+
+            {
+              zoomInfo.message
+            }
+
+            <span>
+              →
+            </span>
+
+          </button>
+
         </div>
 
-        <div
-          style={{
-            display: "flex",
-            gap: "20px",
-            marginTop: "15px",
-            fontSize: "13px",
-            color: "#8fa6b5",
-          }}
-        >
-          <span>🔴 Investigated wallet</span>
-          <span>🟢 Connected wallet</span>
-          <span>━ Transaction relationship</span>
-          <span>📍 Known location (exchange/mixer)</span>
-        </div>
       </div>
+
+
+      {/* =================================================
+          SELECTED NODE DETAILS
+      ================================================= */}
+
+      {selectedNode && (
+
+        <div className="network-details">
+
+
+          <div className="network-details-header">
+
+            <div>
+
+              <span>
+                SELECTED NODE
+              </span>
+
+
+              <h2>
+
+                {
+                  selectedNode.vasp?.name ||
+                  "Blockchain Address"
+                }
+
+              </h2>
+
+            </div>
+
+
+            <button
+              onClick={() =>
+                setSelectedNode(
+                  null
+                )
+              }
+            >
+              ×
+            </button>
+
+          </div>
+
+
+          <div className="network-details-grid">
+
+
+            {/* ADDRESS */}
+
+            <div>
+
+              <label>
+                BLOCKCHAIN ADDRESS
+              </label>
+
+
+              <code>
+                {
+                  selectedNode.address
+                }
+              </code>
+
+            </div>
+
+
+            {/* TYPE */}
+
+            <div>
+
+              <label>
+                TYPE
+              </label>
+
+
+              <strong>
+
+                {
+                  selectedNode.vasp?.type ||
+                  selectedNode.type ||
+                  "Wallet"
+                }
+
+              </strong>
+
+            </div>
+
+
+            {/* COUNTRY */}
+
+            <div>
+
+              <label>
+                COUNTRY
+              </label>
+
+
+              <strong>
+
+                {
+                  selectedNode.vasp?.country ||
+                  "Not available"
+                }
+
+              </strong>
+
+            </div>
+
+
+            {/* RISK */}
+
+            <div>
+
+              <label>
+                RISK LEVEL
+              </label>
+
+
+              <RiskBadge
+
+                riskLevel={
+                  selectedNode.vasp?.riskLevel ||
+                  "unknown"
+                }
+
+              />
+
+            </div>
+
+
+            {/* LOCATION SOURCE */}
+
+            <div>
+
+              <label>
+                LOCATION SOURCE
+              </label>
+
+
+              <strong>
+
+                {
+                  selectedNode.source ===
+                  "estimated"
+                    ? "Estimated"
+                    : selectedNode.source ===
+                      "vasp"
+                    ? "VASP Data"
+                    : "Demo Data"
+                }
+
+              </strong>
+
+            </div>
+
+          </div>
+
+        </div>
+
+      )}
+
     </div>
+
   );
 }

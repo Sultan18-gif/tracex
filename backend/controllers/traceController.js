@@ -1,8 +1,8 @@
 const TraceResult = require('../models/TraceResult');
 const Report = require('../models/Report');
-const { traceWallet } = require('../models/services/traceEngine');
-const { buildMapPayload } = require('../models/services/mapPayloadBuilder');
-const { getJurisdictionRisk } = require('../models/services/jurisdictionRisk');
+const { traceWallet } = require('../services/blockchain/traceEngine');
+const { buildMapPayload } = require('../services/mapPayloadBuilder');
+const { getJurisdictionRisk } = require('../services/jurisdictionRisk');
 
 async function runTrace(req, res) {
   try {

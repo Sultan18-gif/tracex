@@ -1,0 +1,7 @@
+{
+  "name": "crypto-fraud-investigation",
+  "private": true,
+  "scripts": {
+    "dev": "node dev.js"
+  }
+}

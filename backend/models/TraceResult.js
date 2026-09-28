@@ -3,7 +3,10 @@ const mongoose = require('mongoose');
 const TraceResultSchema = new mongoose.Schema({
   reportId: { type: mongoose.Schema.Types.ObjectId, ref: 'Report', required: true },
   reportedWallet: { type: String, required: true },
-  chain: { type: String, enum: ['ETH', 'BTC'], required: true },
+  chain: {
+  type: String,
+  required: true
+},
   victimCountry: { type: String, required: true },
 
   status: {

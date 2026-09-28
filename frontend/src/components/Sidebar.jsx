@@ -2,13 +2,12 @@ import { NavLink } from "react-router-dom";
 
 export default function Sidebar({ open, onClose }) {
   const links = [
-    { name: "Dashboard", path: "/dashboard" },
-    { name: "Wallet Investigation", path: "/wallet-investigation" },
-    { name: "Transactions", path: "/transactions" },
-    { name: "Network Graph", path: "/network" },
-    { name: "Cases", path: "/cases" },
-    { name: "Reports", path: "/reports" },
-  ];
+  { name: "Dashboard", path: "/dashboard" },
+  { name: "Transactions", path: "/transactions" },
+  { name: "VASP Network", path: "/vasps" },
+  { name: "Network Graph", path: "/network" },
+  { name: "Reports", path: "/reports" },
+];
 
   const handleClose = () => {
     if (document.activeElement instanceof HTMLElement) {
@@ -33,7 +32,7 @@ export default function Sidebar({ open, onClose }) {
         inert={!open}
       >
         <div className="cs-menu-header">
-          <span>Chain Sentry</span>
+          <span>TRACEX</span>
 
           <button
             type="button"

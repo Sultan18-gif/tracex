@@ -6,3 +6,5 @@ dist/
 .env.*.local
 
 backend/serviceAccountKey.json
+__pycache__/
+*.py[cod]

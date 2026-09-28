@@ -1,6 +1,6 @@
-const API_URL =
-  import.meta.env.VITE_API_BASE_URL ||
-  "http://localhost:5001/api";
+import { API_BASE_URL } from "../src/api.js";
+
+const API_URL = API_BASE_URL;
 
 /* =========================================================
    API HELPER
@@ -78,10 +78,8 @@ export async function saveInvestigation() {
 /* =========================================================
    WALLETS
    ========================================================= */
-
 export async function getWallets() {
   const data = await apiRequest("/wallets");
-
   return Array.isArray(data) ? data : [];
 }
 
@@ -99,6 +97,19 @@ export async function getWallet(address) {
         String(address).toLowerCase()
     ) || null
   );
+}
+
+export async function analyzeWallet(walletAddress) {
+  if (!walletAddress) {
+    throw new Error("Wallet address is required.");
+  }
+
+  return apiRequest("/wallets/analyze", {
+    method: "POST",
+    body: JSON.stringify({
+      walletAddress,
+    }),
+  });
 }
 
 /* =========================================================
@@ -499,5 +510,67 @@ function formatDate(value) {
 export function clearAppData() {
   console.warn(
     "clearAppData() is disabled because application data is stored in the backend."
+  );
+}
+export async function getVASPs() {
+  const data = await apiRequest("/vasps");
+  return Array.isArray(data) ? data : [];
+}
+
+export async function getVASP(vaspId) {
+  if (!vaspId) return null;
+
+  return apiRequest(
+    `/vasps/${encodeURIComponent(vaspId)}`
+  );
+}
+
+export async function createVASP(vaspData = {}) {
+  if (!vaspData.name?.trim()) {
+    throw new Error("VASP name is required.");
+  }
+
+  return apiRequest("/vasps", {
+    method: "POST",
+    body: JSON.stringify({
+      name: vaspData.name.trim(),
+      type: vaspData.type || "Exchange",
+      country: vaspData.country || "",
+      jurisdiction: vaspData.jurisdiction || "",
+      riskLevel: vaspData.riskLevel || "Unknown",
+      status: vaspData.status || "Active",
+      website: vaspData.website || "",
+      addresses: Array.isArray(vaspData.addresses)
+        ? vaspData.addresses
+        : [],
+      notes: vaspData.notes || "",
+    }),
+  });
+}
+
+export async function updateVASP(vaspId, vaspData = {}) {
+  if (!vaspId) {
+    throw new Error("VASP ID is required.");
+  }
+
+  return apiRequest(
+    `/vasps/${encodeURIComponent(vaspId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(vaspData),
+    }
+  );
+}
+
+export async function deleteVASP(vaspId) {
+  if (!vaspId) {
+    throw new Error("VASP ID is required.");
+  }
+
+  return apiRequest(
+    `/vasps/${encodeURIComponent(vaspId)}`,
+    {
+      method: "DELETE",
+    }
   );
 }
