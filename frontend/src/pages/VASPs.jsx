@@ -367,11 +367,11 @@ export default function VASPProviders() {
               {createError && <div className="vasp-error" role="alert">{createError}</div>}
               <form className="vasp-create-form" key={editingVasp?.id || "new-vasp"} onSubmit={createVASP}>
                 <label>Provider name *<input name="name" required maxLength="120" autoFocus defaultValue={editingVasp?.name || ""} /></label>
-                <label>Type<select name="type" defaultValue={editingVasp?.type || "Exchange"><option>Exchange</option><option>Broker</option><option>Custodian</option><option>Payment Provider</option><option>Other</option></select></label>
+                <label>Type<select name="type" defaultValue={editingVasp?.type || "Exchange"}><option>Exchange</option><option>Broker</option><option>Custodian</option><option>Payment Provider</option><option>Other</option></select></label>
                 <label>Country<input name="country" maxLength="100" defaultValue={editingVasp?.country || ""} /></label>
                 <label>Jurisdiction<input name="jurisdiction" maxLength="120" defaultValue={editingVasp?.jurisdiction || ""} /></label>
-                <label>Risk level<select name="riskLevel" defaultValue={editingVasp?.riskLevel || "Unknown"><option>Unknown</option><option>Low</option><option>Medium</option><option>High</option><option>Critical</option></select></label>
-                <label>Status<select name="status" defaultValue={editingVasp?.status || "Active"><option>Active</option><option>Inactive</option></select></label>
+                <label>Risk level<select name="riskLevel" defaultValue={editingVasp?.riskLevel || "Unknown"}><option>Unknown</option><option>Low</option><option>Medium</option><option>High</option><option>Critical</option></select></label>
+                <label>Status<select name="status" defaultValue={editingVasp?.status || "Active"}><option>Active</option><option>Inactive</option></select></label>
                 <label className="vasp-form-wide">Physical address / headquarters<input name="physicalLocation" maxLength="240" placeholder="City, region, street address" defaultValue={editingVasp?.physicalLocation || ""} /></label>
                 <label>Latitude<input name="latitude" type="number" step="any" min="-90" max="90" placeholder="e.g. 19.0760" defaultValue={editingVasp?.latitude ?? ""} /></label>
                 <label>Longitude<input name="longitude" type="number" step="any" min="-180" max="180" placeholder="e.g. 72.8777" defaultValue={editingVasp?.longitude ?? ""} /></label>
