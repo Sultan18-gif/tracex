@@ -1,5 +1,6 @@
 const express = require("express");
 const crypto = require("crypto");
+const { db } = require("../firebase");
 
 const {
   generateRegistrationOptions,
@@ -18,7 +19,16 @@ router.get("/test", (req, res) => {
 const rpName = "TraceX";
 
 function getWebAuthnContext(req) {
-  const configuredOrigin = process.env.PUBLIC_APP_URL || req.get("origin") || "http://localhost:5173";
+  const forwardedHost = req.get("x-forwarded-host") || req.get("host");
+  const forwardedProto = req.get("x-forwarded-proto") || req.protocol;
+  const refererOrigin = req.get("referer")
+    ? new URL(req.get("referer")).origin
+    : null;
+  const configuredOrigin =
+    req.get("origin") ||
+    refererOrigin ||
+    process.env.PUBLIC_APP_URL ||
+    (forwardedHost ? `${forwardedProto}://${forwardedHost}` : "http://localhost:5173");
   const origin = new URL(configuredOrigin).origin;
   return {
     origin,
@@ -26,8 +36,40 @@ function getWebAuthnContext(req) {
   };
 }
 
-// Temporary storage for testing
-const users = new Map();
+const usersCollection = () => {
+  if (!db) {
+    const error = new Error("Firestore is unavailable. Configure FIREBASE_SERVICE_ACCOUNT_KEY in the deployment environment.");
+    error.statusCode = 503;
+    throw error;
+  }
+  return db.collection("webauthn_users");
+};
+
+const getUserDocumentId = (email) =>
+  crypto.createHash("sha256").update(email.trim().toLowerCase()).digest("hex");
+
+async function loadUser(email, create = false) {
+  const normalizedEmail = email.trim().toLowerCase();
+  const reference = usersCollection().doc(getUserDocumentId(normalizedEmail));
+  const snapshot = await reference.get();
+  if (snapshot.exists) return { reference, user: snapshot.data() };
+  if (!create) return { reference, user: null };
+
+  const user = {
+    email: normalizedEmail,
+    userId: crypto.randomBytes(32).toString("base64url"),
+    passkeys: [],
+  };
+  await reference.set(user);
+  return { reference, user };
+}
+
+function sendWebAuthnError(res, error, fallbackMessage, fallbackStatus = 500) {
+  console.error(fallbackMessage, error);
+  res.status(error.statusCode || fallbackStatus).json({
+    error: error.statusCode === 503 ? error.message : fallbackMessage,
+  });
+}
 
 /*
   Registration
@@ -45,21 +87,12 @@ router.post("/register/options", async (req, res) => {
       });
     }
 
-    let user = users.get(email);
-
-    if (!user) {
-      user = {
-        email,
-        id: crypto.randomBytes(32),
-        passkeys: [],
-      };
-
-      users.set(email, user);
-    }
+    const { reference, user } = await loadUser(email, true);
 
     const options = await generateRegistrationOptions({
       rpName,
       rpID,
+      userID: Buffer.from(user.userId, "base64url"),
 
       userName: email,
 
@@ -77,15 +110,11 @@ router.post("/register/options", async (req, res) => {
       },
     });
 
-    user.currentRegistrationOptions = options;
+    await reference.set({ currentRegistrationOptions: options }, { merge: true });
 
     res.json(options);
   } catch (error) {
-    console.error("WebAuthn registration options error:", error);
-
-    res.status(500).json({
-      error: "Unable to create registration options",
-    });
+    sendWebAuthnError(res, error, "Unable to create registration options");
   }
 });
 
@@ -106,7 +135,7 @@ router.post("/register/verify", async (req, res) => {
       });
     }
 
-    const user = users.get(email);
+    const { reference, user } = await loadUser(email);
 
     if (!user || !user.currentRegistrationOptions) {
       return res.status(400).json({
@@ -117,8 +146,7 @@ router.post("/register/verify", async (req, res) => {
     const verification = await verifyRegistrationResponse({
       response,
 
-      expectedChallenge:
-        user.currentRegistrationOptions.challenge,
+      expectedChallenge: user.currentRegistrationOptions.challenge,
 
       expectedOrigin: origin,
       expectedRPID: rpID,
@@ -139,28 +167,26 @@ router.post("/register/verify", async (req, res) => {
       credentialBackedUp,
     } = verification.registrationInfo;
 
-    user.passkeys.push({
+    const passkey = {
       id: credential.id,
-      publicKey: credential.publicKey,
+      publicKey: Buffer.from(credential.publicKey).toString("base64"),
       counter: credential.counter,
       transports: response.response?.transports || [],
       deviceType: credentialDeviceType,
       backedUp: credentialBackedUp,
-    });
+    };
 
-    delete user.currentRegistrationOptions;
+    await reference.set({
+      passkeys: [...(user.passkeys || []), passkey],
+      currentRegistrationOptions: null,
+    }, { merge: true });
 
     res.json({
       verified: true,
       message: "Windows Hello registered successfully",
     });
   } catch (error) {
-    console.error("WebAuthn registration verification error:", error);
-
-    res.status(400).json({
-      verified: false,
-      error: error.message,
-    });
+    sendWebAuthnError(res, error, error.message || "Windows Hello registration failed", 400);
   }
 });
 
@@ -181,9 +207,9 @@ router.post("/login/options", async (req, res) => {
       });
     }
 
-    const user = users.get(email);
+    const { reference, user } = await loadUser(email);
 
-    if (!user || user.passkeys.length === 0) {
+    if (!user || (user.passkeys || []).length === 0) {
       return res.status(404).json({
         error: "No Windows Hello credential registered",
       });
@@ -192,7 +218,7 @@ router.post("/login/options", async (req, res) => {
     const options = await generateAuthenticationOptions({
       rpID,
 
-      allowCredentials: user.passkeys.map((passkey) => ({
+      allowCredentials: (user.passkeys || []).map((passkey) => ({
         id: passkey.id,
         transports: passkey.transports,
       })),
@@ -200,15 +226,11 @@ router.post("/login/options", async (req, res) => {
       userVerification: "required",
     });
 
-    user.currentAuthenticationOptions = options;
+    await reference.set({ currentAuthenticationOptions: options }, { merge: true });
 
     res.json(options);
   } catch (error) {
-    console.error("WebAuthn login options error:", error);
-
-    res.status(500).json({
-      error: "Unable to create authentication options",
-    });
+    sendWebAuthnError(res, error, "Unable to create authentication options");
   }
 });
 
@@ -229,7 +251,7 @@ router.post("/login/verify", async (req, res) => {
       });
     }
 
-    const user = users.get(email);
+    const { reference, user } = await loadUser(email);
 
     if (!user || !user.currentAuthenticationOptions) {
       return res.status(400).json({
@@ -237,7 +259,7 @@ router.post("/login/verify", async (req, res) => {
       });
     }
 
-    const passkey = user.passkeys.find(
+    const passkey = (user.passkeys || []).find(
       (item) => item.id === response.id
     );
 
@@ -258,7 +280,7 @@ router.post("/login/verify", async (req, res) => {
 
       credential: {
         id: passkey.id,
-        publicKey: passkey.publicKey,
+        publicKey: Buffer.from(passkey.publicKey, "base64"),
         counter: passkey.counter,
         transports: passkey.transports,
       },
@@ -273,21 +295,22 @@ router.post("/login/verify", async (req, res) => {
       });
     }
 
-    passkey.counter = verification.authenticationInfo.newCounter;
-
-    delete user.currentAuthenticationOptions;
+    const updatedPasskeys = (user.passkeys || []).map((savedPasskey) =>
+      savedPasskey.id === passkey.id
+        ? { ...savedPasskey, counter: verification.authenticationInfo.newCounter }
+        : savedPasskey
+    );
+    await reference.set({
+      passkeys: updatedPasskeys,
+      currentAuthenticationOptions: null,
+    }, { merge: true });
 
     res.json({
       verified: true,
       message: "Windows Hello authentication successful",
     });
   } catch (error) {
-    console.error("WebAuthn authentication verification error:", error);
-
-    res.status(401).json({
-      verified: false,
-      error: error.message,
-    });
+    sendWebAuthnError(res, error, error.message || "Windows Hello authentication failed", 401);
   }
 });
 
