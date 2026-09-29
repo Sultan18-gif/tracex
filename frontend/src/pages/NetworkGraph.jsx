@@ -305,6 +305,21 @@ function getNodeLocation(
     };
   }
 
+  /* VASP-supplied office or headquarters location */
+  if (
+    vasp?.latitude != null &&
+    vasp?.longitude != null &&
+    Number.isFinite(Number(vasp.latitude)) &&
+    Number.isFinite(Number(vasp.longitude))
+  ) {
+    return {
+      lat: Number(vasp.latitude),
+      lng: Number(vasp.longitude),
+      source: "vasp",
+      vasp,
+    };
+  }
+
 
   /* Demo location */
   const demo =
@@ -2151,6 +2166,13 @@ export default function NetworkGraph({
 
                   )}
 
+                  {selectedNode.vasp?.physicalLocation && (
+                    <div className="popup-row">
+                      <span className="popup-row-label">Physical location</span>
+                      <span className="popup-row-value">{selectedNode.vasp.physicalLocation}</span>
+                    </div>
+                  )}
+
 
                   {selectedNode.vasp?.riskLevel && (
 
@@ -2445,6 +2467,22 @@ export default function NetworkGraph({
 
               </strong>
 
+            </div>
+
+            <div>
+              <label>PHYSICAL LOCATION</label>
+              <strong>{selectedNode.vasp?.physicalLocation || "Not available"}</strong>
+            </div>
+
+            <div>
+              <label>MAP COORDINATES</label>
+              <strong>
+                {selectedNode.source === "vasp" && selectedNode.vasp?.latitude != null && selectedNode.vasp?.longitude != null
+                  ? `${Number(selectedNode.vasp.latitude).toFixed(5)}, ${Number(selectedNode.vasp.longitude).toFixed(5)}`
+                  : selectedNode.source === "vasp" && selectedNode.vasp?.matchedAddress?.lat != null && selectedNode.vasp?.matchedAddress?.lng != null
+                    ? `${Number(selectedNode.vasp.matchedAddress.lat).toFixed(5)}, ${Number(selectedNode.vasp.matchedAddress.lng).toFixed(5)}`
+                    : "No verified coordinates"}
+              </strong>
             </div>
 
 

@@ -7917,6 +7917,7 @@ select.cs-filter-select option {
   padding: 10px 12px; background: #080e16; color: #e8ecf1; font: inherit; font-size: 14px;
 }
 .vasp-create-form textarea { resize: vertical; }
+.vasp-location-help { margin: -5px 0 0; color: #8295aa; font-size: 12px; line-height: 1.5; }
 .vasp-create-form input:focus,
 .vasp-create-form select:focus,
 .vasp-create-form textarea:focus { outline: 2px solid rgba(34, 199, 223, 0.55); border-color: #22c7df; }

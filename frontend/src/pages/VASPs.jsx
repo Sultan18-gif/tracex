@@ -10,6 +10,7 @@ export default function VASPProviders() {
   const [riskFilter, setRiskFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [editingVasp, setEditingVasp] = useState(null);
   const [saving, setSaving] = useState(false);
   const [createError, setCreateError] = useState("");
 
@@ -21,27 +22,42 @@ export default function VASPProviders() {
       type: form.get("type"),
       country: String(form.get("country") || "").trim(),
       jurisdiction: String(form.get("jurisdiction") || "").trim(),
+      physicalLocation: String(form.get("physicalLocation") || "").trim(),
+      latitude: form.get("latitude") === "" ? null : Number(form.get("latitude")),
+      longitude: form.get("longitude") === "" ? null : Number(form.get("longitude")),
       riskLevel: form.get("riskLevel"),
       status: form.get("status"),
       website: String(form.get("website") || "").trim(),
       addresses: String(form.get("addresses") || "")
-        .split(/\r?\n/).map((address) => address.trim()).filter(Boolean),
+        .split(/\r?\n/).map((address) => address.trim()).filter(Boolean)
+        .map((address) => {
+          const previous = (editingVasp?.addresses || []).find((item) =>
+            String(typeof item === "string" ? item : item.address || item.wallet || item.walletAddress || "").toLowerCase() === address.toLowerCase()
+          );
+          return previous && typeof previous === "object" ? { ...previous, address } : address;
+        }),
       notes: String(form.get("notes") || "").trim(),
     };
 
     try {
       setSaving(true);
       setCreateError("");
-      const response = await fetch(`${API_BASE_URL}/vasps`, {
-        method: "POST",
+      const response = await fetch(
+        editingVasp
+          ? `${API_BASE_URL}/vasps/${encodeURIComponent(editingVasp.id)}`
+          : `${API_BASE_URL}/vasps`,
+        {
+        method: editingVasp ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
-      });
+        }
+      );
       const result = await response.json().catch(() => ({}));
       if (!response.ok) {
         throw new Error(result.message || result.error || "Could not create VASP.");
       }
       setShowCreateForm(false);
+      setEditingVasp(null);
       await loadVASPs();
     } catch (err) {
       setCreateError(err.message || "Could not create VASP.");
@@ -292,7 +308,7 @@ export default function VASPProviders() {
 
           <button
             className="vasp-add-btn"
-            onClick={() => { setCreateError(""); setShowCreateForm(true); }}
+            onClick={() => { setCreateError(""); setEditingVasp(null); setShowCreateForm(true); }}
           >
             + Add VASP
           </button>
@@ -343,25 +359,29 @@ export default function VASPProviders() {
             <section className="vasp-create-modal" role="dialog" aria-modal="true" aria-labelledby="vasp-create-title">
               <div className="vasp-create-heading">
                 <div>
-                  <h2 id="vasp-create-title">Add VASP provider</h2>
-                  <p>Save provider details and known wallet addresses to the intelligence database.</p>
+                  <h2 id="vasp-create-title">{editingVasp ? "Edit VASP provider" : "Add VASP provider"}</h2>
+                  <p>Add a confirmed physical address and coordinates to show this provider’s location in Network Graph.</p>
                 </div>
-                <button type="button" className="vasp-modal-close" aria-label="Close" disabled={saving} onClick={() => setShowCreateForm(false)}>×</button>
+                <button type="button" className="vasp-modal-close" aria-label="Close" disabled={saving} onClick={() => { setShowCreateForm(false); setEditingVasp(null); }}>×</button>
               </div>
               {createError && <div className="vasp-error" role="alert">{createError}</div>}
-              <form className="vasp-create-form" onSubmit={createVASP}>
-                <label>Provider name *<input name="name" required maxLength="120" autoFocus /></label>
-                <label>Type<select name="type" defaultValue="Exchange"><option>Exchange</option><option>Broker</option><option>Custodian</option><option>Payment Provider</option><option>Other</option></select></label>
-                <label>Country<input name="country" maxLength="100" /></label>
-                <label>Jurisdiction<input name="jurisdiction" maxLength="120" /></label>
-                <label>Risk level<select name="riskLevel" defaultValue="Unknown"><option>Unknown</option><option>Low</option><option>Medium</option><option>High</option><option>Critical</option></select></label>
-                <label>Status<select name="status" defaultValue="Active"><option>Active</option><option>Inactive</option></select></label>
-                <label className="vasp-form-wide">Website<input name="website" type="url" placeholder="https://example.com" /></label>
-                <label className="vasp-form-wide">Known wallet addresses<textarea name="addresses" rows="3" placeholder="One address per line" /></label>
-                <label className="vasp-form-wide">Notes<textarea name="notes" rows="3" maxLength="2000" /></label>
+              <form className="vasp-create-form" key={editingVasp?.id || "new-vasp"} onSubmit={createVASP}>
+                <label>Provider name *<input name="name" required maxLength="120" autoFocus defaultValue={editingVasp?.name || ""} /></label>
+                <label>Type<select name="type" defaultValue={editingVasp?.type || "Exchange"><option>Exchange</option><option>Broker</option><option>Custodian</option><option>Payment Provider</option><option>Other</option></select></label>
+                <label>Country<input name="country" maxLength="100" defaultValue={editingVasp?.country || ""} /></label>
+                <label>Jurisdiction<input name="jurisdiction" maxLength="120" defaultValue={editingVasp?.jurisdiction || ""} /></label>
+                <label>Risk level<select name="riskLevel" defaultValue={editingVasp?.riskLevel || "Unknown"><option>Unknown</option><option>Low</option><option>Medium</option><option>High</option><option>Critical</option></select></label>
+                <label>Status<select name="status" defaultValue={editingVasp?.status || "Active"><option>Active</option><option>Inactive</option></select></label>
+                <label className="vasp-form-wide">Physical address / headquarters<input name="physicalLocation" maxLength="240" placeholder="City, region, street address" defaultValue={editingVasp?.physicalLocation || ""} /></label>
+                <label>Latitude<input name="latitude" type="number" step="any" min="-90" max="90" placeholder="e.g. 19.0760" defaultValue={editingVasp?.latitude ?? ""} /></label>
+                <label>Longitude<input name="longitude" type="number" step="any" min="-180" max="180" placeholder="e.g. 72.8777" defaultValue={editingVasp?.longitude ?? ""} /></label>
+                <p className="vasp-location-help vasp-form-wide">Enter coordinates for a confirmed office or headquarters. A country name alone can’t identify a precise point on the map.</p>
+                <label className="vasp-form-wide">Website<input name="website" type="url" placeholder="https://example.com" defaultValue={editingVasp?.website || ""} /></label>
+                <label className="vasp-form-wide">Known wallet addresses<textarea name="addresses" rows="3" placeholder="One address per line" defaultValue={(editingVasp?.addresses || []).map((item) => typeof item === "string" ? item : item.address || item.wallet || item.walletAddress || "").filter(Boolean).join("\n")} /></label>
+                <label className="vasp-form-wide">Notes<textarea name="notes" rows="3" maxLength="2000" defaultValue={editingVasp?.notes || ""} /></label>
                 <div className="vasp-create-actions">
-                  <button type="button" className="vasp-cancel-btn" disabled={saving} onClick={() => setShowCreateForm(false)}>Cancel</button>
-                  <button type="submit" className="vasp-save-btn" disabled={saving}>{saving ? "Saving…" : "Save provider"}</button>
+                  <button type="button" className="vasp-cancel-btn" disabled={saving} onClick={() => { setShowCreateForm(false); setEditingVasp(null); }}>Cancel</button>
+                  <button type="submit" className="vasp-save-btn" disabled={saving}>{saving ? "Saving…" : editingVasp ? "Save changes" : "Save provider"}</button>
                 </div>
               </form>
             </section>
@@ -491,6 +511,13 @@ export default function VASPProviders() {
                           }}
                         >
                           Wallets
+                        </button>
+
+                        <button
+                          title="Edit provider and physical location"
+                          onClick={() => { setCreateError(""); setEditingVasp(vasp); setShowCreateForm(true); }}
+                        >
+                          Edit
                         </button>
 
                       </div>
