@@ -19,7 +19,9 @@ async function getWalletTransactions(address, chain) {
 
 async function getEthereumTransactions(address) {
   if (!process.env.ETHERSCAN_API_KEY) {
-    throw new Error("ETHERSCAN_API_KEY is missing in .env");
+    const error = new Error("Ethereum transaction lookup is not configured. Add ETHERSCAN_API_KEY to the Vercel project environment variables and redeploy.");
+    error.statusCode = 503;
+    throw error;
   }
 
   const response = await axios.get("https://api.etherscan.io/v2/api", {
@@ -47,7 +49,9 @@ async function getEthereumTransactions(address) {
       return [];
     }
 
-    throw new Error(data.result || data.message || "Etherscan API error");
+    const error = new Error(data.result || data.message || "Etherscan API error");
+    error.statusCode = 502;
+    throw error;
   }
 
   return data.result.map((tx) => ({

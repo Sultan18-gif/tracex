@@ -34,7 +34,7 @@ const getTransactions = async (req, res) => {
       error
     );
 
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       message: "Unable to fetch transactions",
       error: error.message
     });

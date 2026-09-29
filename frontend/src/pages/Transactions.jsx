@@ -43,13 +43,15 @@ export default function Transactions() {
         `${API_BASE_URL}/transactions/${address}`
       );
 
+      const data = await response.json().catch(() => null);
+
       if (!response.ok) {
         throw new Error(
-          `Transaction API returned ${response.status}`
+          data?.error ||
+            data?.message ||
+            `Transaction API returned ${response.status}`
         );
       }
-
-      const data = await response.json();
 
       /*
        * Your backend may return the array directly.
@@ -67,9 +69,7 @@ export default function Transactions() {
         err
       );
 
-      setError(
-        "Unable to load transactions from the blockchain service."
-      );
+      setError(err.message || "Unable to load transactions from the blockchain service.");
 
       setTransactions([]);
     } finally {
