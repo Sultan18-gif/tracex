@@ -14,11 +14,31 @@ app.use(cors());
 app.use(express.json());  
   
 // Backend health check.
-app.get("/api/health", (req, res) => {
-  res.json({  
-    message: "Crypto Fraud Investigation Backend is running",
-    firebase: db ? "connected" : "not_configured",
-  });  
+app.get("/api/health", async (req, res) => {
+  if (!db) {
+    return res.status(503).json({
+      message: "Crypto Fraud Investigation Backend is running",
+      firebase: "not_configured",
+      details: configurationError,
+    });
+  }
+
+  try {
+    // Force a harmless read so this endpoint checks Firestore access, not
+    // merely whether the Firebase Admin SDK initialized.
+    await db.collection("_health_check").limit(1).get();
+    return res.json({
+      message: "Crypto Fraud Investigation Backend is running",
+      firebase: "connected",
+    });
+  } catch (error) {
+    console.error("Firestore health check failed:", error);
+    return res.status(503).json({
+      message: "Crypto Fraud Investigation Backend is running",
+      firebase: "unavailable",
+      error: error.code || "firestore_request_failed",
+    });
+  }
 });  
 
 // Let the API and health check start without Firebase credentials, while

@@ -905,19 +905,15 @@ function Login() {
         "Cannot connect to the Chain Sentry backend. Make sure the backend is running on port 5001."
       );
     } else if (error.name === "InvalidStateError") {
-  console.log(
-    "Fingerprint / Windows Hello is already registered. Continuing to face registration."
-  );
-
-  setError("");
-  setSignupStep("face");
-  setFaceMode("register");
-} else {
-  setError(
-    error.message ||
-      "Fingerprint / Windows Hello registration failed."
-  );
-}
+      setError(
+        "This device already has a TraceX passkey, but the server did not confirm it for this account. Remove the existing TraceX passkey from your device's passkey settings, then register again."
+      );
+    } else {
+      setError(
+        error.message ||
+          "Fingerprint / Windows Hello registration failed."
+      );
+    }
   } finally {
     setHelloLoading(false);
   }
