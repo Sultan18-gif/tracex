@@ -9,6 +9,46 @@ export default function VASPProviders() {
   const [search, setSearch] = useState("");
   const [riskFilter, setRiskFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [createError, setCreateError] = useState("");
+
+  const createVASP = async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const payload = {
+      name: String(form.get("name") || "").trim(),
+      type: form.get("type"),
+      country: String(form.get("country") || "").trim(),
+      jurisdiction: String(form.get("jurisdiction") || "").trim(),
+      riskLevel: form.get("riskLevel"),
+      status: form.get("status"),
+      website: String(form.get("website") || "").trim(),
+      addresses: String(form.get("addresses") || "")
+        .split(/\r?\n/).map((address) => address.trim()).filter(Boolean),
+      notes: String(form.get("notes") || "").trim(),
+    };
+
+    try {
+      setSaving(true);
+      setCreateError("");
+      const response = await fetch(`${API_BASE_URL}/vasps`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(result.message || result.error || "Could not create VASP.");
+      }
+      setShowCreateForm(false);
+      await loadVASPs();
+    } catch (err) {
+      setCreateError(err.message || "Could not create VASP.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   useEffect(() => {
     loadVASPs();
@@ -252,7 +292,7 @@ export default function VASPProviders() {
 
           <button
             className="vasp-add-btn"
-            onClick={() => alert("Connect this button to your Create VASP form.")}
+            onClick={() => { setCreateError(""); setShowCreateForm(true); }}
           >
             + Add VASP
           </button>
@@ -295,6 +335,38 @@ export default function VASPProviders() {
           </select>
 
         </div>
+
+        {showCreateForm && (
+          <div className="vasp-modal-backdrop" onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !saving) setShowCreateForm(false);
+          }}>
+            <section className="vasp-create-modal" role="dialog" aria-modal="true" aria-labelledby="vasp-create-title">
+              <div className="vasp-create-heading">
+                <div>
+                  <h2 id="vasp-create-title">Add VASP provider</h2>
+                  <p>Save provider details and known wallet addresses to the intelligence database.</p>
+                </div>
+                <button type="button" className="vasp-modal-close" aria-label="Close" disabled={saving} onClick={() => setShowCreateForm(false)}>×</button>
+              </div>
+              {createError && <div className="vasp-error" role="alert">{createError}</div>}
+              <form className="vasp-create-form" onSubmit={createVASP}>
+                <label>Provider name *<input name="name" required maxLength="120" autoFocus /></label>
+                <label>Type<select name="type" defaultValue="Exchange"><option>Exchange</option><option>Broker</option><option>Custodian</option><option>Payment Provider</option><option>Other</option></select></label>
+                <label>Country<input name="country" maxLength="100" /></label>
+                <label>Jurisdiction<input name="jurisdiction" maxLength="120" /></label>
+                <label>Risk level<select name="riskLevel" defaultValue="Unknown"><option>Unknown</option><option>Low</option><option>Medium</option><option>High</option><option>Critical</option></select></label>
+                <label>Status<select name="status" defaultValue="Active"><option>Active</option><option>Inactive</option></select></label>
+                <label className="vasp-form-wide">Website<input name="website" type="url" placeholder="https://example.com" /></label>
+                <label className="vasp-form-wide">Known wallet addresses<textarea name="addresses" rows="3" placeholder="One address per line" /></label>
+                <label className="vasp-form-wide">Notes<textarea name="notes" rows="3" maxLength="2000" /></label>
+                <div className="vasp-create-actions">
+                  <button type="button" className="vasp-cancel-btn" disabled={saving} onClick={() => setShowCreateForm(false)}>Cancel</button>
+                  <button type="submit" className="vasp-save-btn" disabled={saving}>{saving ? "Saving…" : "Save provider"}</button>
+                </div>
+              </form>
+            </section>
+          </div>
+        )}
 
         {/* TABLE */}
         <div className="vasp-table-wrapper">
