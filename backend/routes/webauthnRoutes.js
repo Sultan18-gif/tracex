@@ -71,6 +71,12 @@ function sendWebAuthnError(res, error, fallbackMessage, fallbackStatus = 500) {
   });
 }
 
+function makeFirestoreSafeOptions(options) {
+  // SimpleWebAuthn may return optional fields with `undefined` values.
+  // Firestore rejects those unless ignoreUndefinedProperties is enabled.
+  return JSON.parse(JSON.stringify(options));
+}
+
 /*
   Registration
   -----------------------------------------
@@ -110,7 +116,10 @@ router.post("/register/options", async (req, res) => {
       },
     });
 
-    await reference.set({ currentRegistrationOptions: options }, { merge: true });
+    await reference.set(
+      { currentRegistrationOptions: makeFirestoreSafeOptions(options) },
+      { merge: true }
+    );
 
     res.json(options);
   } catch (error) {
@@ -226,7 +235,10 @@ router.post("/login/options", async (req, res) => {
       userVerification: "required",
     });
 
-    await reference.set({ currentAuthenticationOptions: options }, { merge: true });
+    await reference.set(
+      { currentAuthenticationOptions: makeFirestoreSafeOptions(options) },
+      { merge: true }
+    );
 
     res.json(options);
   } catch (error) {
