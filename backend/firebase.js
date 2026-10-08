@@ -1,138 +1,180 @@
-const fs = require("fs");
-const path = require("path");
-
 const {
   initializeApp,
   cert,
   getApps,
+  getApp,
 } = require("firebase-admin/app");
 
-const { getFirestore } = require("firebase-admin/firestore");
-const { getAuth } = require("firebase-admin/auth");
+const {
+  getFirestore,
+} = require("firebase-admin/firestore");
 
-function loadServiceAccount() {
+const {
+  getAuth,
+} = require("firebase-admin/auth");
+
+function getServiceAccount() {
   const base64Key =
     process.env.FIREBASE_SERVICE_ACCOUNT_KEY_BASE64?.trim();
-
-  console.log(
-    "FIREBASE_SERVICE_ACCOUNT_KEY_BASE64 exists:",
-    Boolean(base64Key)
-  );
-
-  if (base64Key) {
-    try {
-      const json = Buffer
-        .from(base64Key, "base64")
-        .toString("utf8");
-
-      const serviceAccount = JSON.parse(json);
-
-      console.log(
-        "Firebase service account decoded successfully."
-      );
-      console.log(
-        "Firebase project:",
-        serviceAccount.project_id
-      );
-
-      return serviceAccount;
-    } catch (error) {
-      console.error(
-        "BASE64 FIREBASE KEY ERROR:",
-        error.message
-      );
-
-      throw new Error(
-        "FIREBASE_SERVICE_ACCOUNT_KEY_BASE64 could not be decoded."
-      );
-    }
-  }
 
   const jsonKey =
     process.env.FIREBASE_SERVICE_ACCOUNT_KEY?.trim();
 
-  console.log(
-    "FIREBASE_SERVICE_ACCOUNT_KEY exists:",
-    Boolean(jsonKey)
-  );
+  let serviceAccount;
 
-  if (jsonKey) {
+  // 1. Prefer Base64
+  if (base64Key) {
     try {
-      return JSON.parse(jsonKey);
-    } catch (error) {
-      console.error(
-        "FIREBASE JSON KEY ERROR:",
-        error.message
-      );
+      const decoded = Buffer
+        .from(base64Key, "base64")
+        .toString("utf8");
 
+      serviceAccount = JSON.parse(decoded);
+
+      console.log(
+        "Firebase credentials loaded from BASE64."
+      );
+    } catch (error) {
       throw new Error(
-        "FIREBASE_SERVICE_ACCOUNT_KEY is not valid JSON."
+        "Firebase Base64 credentials are invalid: " +
+        error.message
       );
     }
   }
 
-  throw new Error(
-    "NO FIREBASE SERVICE ACCOUNT ENVIRONMENT VARIABLE FOUND."
-  );
+  // 2. Fallback to normal JSON
+  else if (jsonKey) {
+    try {
+      serviceAccount = JSON.parse(jsonKey);
+
+      console.log(
+        "Firebase credentials loaded from JSON."
+      );
+    } catch (error) {
+      throw new Error(
+        "Firebase JSON credentials are invalid: " +
+        error.message
+      );
+    }
+  }
+
+  else {
+    throw new Error(
+      "No Firebase service account credentials found."
+    );
+  }
+
+  // Validate credentials
+  if (!serviceAccount.project_id) {
+    throw new Error(
+      "Firebase credentials missing project_id."
+    );
+  }
+
+  if (!serviceAccount.client_email) {
+    throw new Error(
+      "Firebase credentials missing client_email."
+    );
+  }
+
+  if (!serviceAccount.private_key) {
+    throw new Error(
+      "Firebase credentials missing private_key."
+    );
+  }
+
+  return serviceAccount;
 }
+
 
 let db = null;
 let adminAuth = null;
 let configurationError = null;
 
 try {
-  const serviceAccount = loadServiceAccount();
 
-  if (!serviceAccount.project_id) {
-    throw new Error("Firebase project_id is missing.");
-  }
+  const serviceAccount = getServiceAccount();
 
-  if (!serviceAccount.client_email) {
-    throw new Error("Firebase client_email is missing.");
-  }
+  console.log(
+    "Firebase project:",
+    serviceAccount.project_id
+  );
 
-  if (!serviceAccount.private_key) {
-    throw new Error("Firebase private_key is missing.");
-  }
+  console.log(
+    "Firebase client:",
+    serviceAccount.client_email
+  );
 
-  if (getApps().length === 0) {
-    initializeApp({
-      credential: cert(serviceAccount),
-    });
-  }
+  /*
+   * Reuse existing Firebase Admin app
+   * if one already exists.
+   */
+  const app =
+    getApps().length > 0
+      ? getApp()
+      : initializeApp({
+          credential: cert(serviceAccount),
+        });
 
-  db = getFirestore();
-  adminAuth = getAuth();
+  /*
+   * IMPORTANT:
+   * Get Firestore from the initialized app.
+   */
+  db = getFirestore(app);
 
-  console.log("====================================");
-  console.log("FIREBASE ADMIN INITIALIZED SUCCESSFULLY");
-  console.log("PROJECT:", serviceAccount.project_id);
-  console.log("FIRESTORE: READY");
-  console.log("====================================");
+  adminAuth = getAuth(app);
+
+  console.log(
+    "=========================================="
+  );
+
+  console.log(
+    "FIREBASE ADMIN INITIALIZED SUCCESSFULLY"
+  );
+
+  console.log(
+    "PROJECT:",
+    serviceAccount.project_id
+  );
+
+  console.log(
+    "FIRESTORE:",
+    Boolean(db)
+  );
+
+  console.log(
+    "AUTH:",
+    Boolean(adminAuth)
+  );
+
+  console.log(
+    "=========================================="
+  );
 
 } catch (error) {
 
-  configurationError = error.message;
-
-  console.error("====================================");
-  console.error("FIREBASE ADMIN INITIALIZATION FAILED");
-  console.error("ERROR:", error.message);
-  console.error("====================================");
+  configurationError =
+    error?.stack ||
+    error?.message ||
+    String(error);
 
   console.error(
-    "BASE64 ENV PRESENT:",
-    Boolean(
-      process.env.FIREBASE_SERVICE_ACCOUNT_KEY_BASE64
-    )
+    "=========================================="
   );
 
   console.error(
-    "JSON ENV PRESENT:",
-    Boolean(
-      process.env.FIREBASE_SERVICE_ACCOUNT_KEY
-    )
+    "FIREBASE ADMIN INITIALIZATION FAILED"
+  );
+
+  console.error(
+    configurationError
+  );
+
+  console.error(
+    "=========================================="
   );
 }
+
 
 module.exports = {
   db,
