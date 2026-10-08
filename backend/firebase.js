@@ -20,8 +20,9 @@ const {
 ========================================================= */
 
 function loadServiceAccount() {
-  const inlineKey =
-    process.env.FIREBASE_ADMIN_KEY?.trim();
+const inlineKey =
+  process.env.FIREBASE_SERVICE_ACCOUNT_KEY?.trim() ||
+  process.env.FIREBASE_ADMIN_KEY?.trim();
 
   const configuredPath =
     process.env.FIREBASE_SERVICE_ACCOUNT_PATH?.trim();
@@ -37,7 +38,7 @@ function loadServiceAccount() {
       serviceAccount = JSON.parse(inlineKey);
     } catch (error) {
       throw new Error(
-        "FIREBASE_ADMIN_KEY is not valid JSON. " +
+        "Firebase service-account environment variable is not valid JSON. " +
           "Set it to the complete Firebase service-account JSON " +
           "or use FIREBASE_SERVICE_ACCOUNT_PATH."
       );
@@ -69,7 +70,7 @@ function loadServiceAccount() {
     } catch (error) {
       throw new Error(
         `Firebase service-account credentials could not be read from ${credentialsPath}. ` +
-          "Set FIREBASE_SERVICE_ACCOUNT_PATH or provide valid JSON in FIREBASE_ADMIN_KEY."
+          "Set FIREBASE_SERVICE_ACCOUNT_PATH or provide valid JSON in FIREBASE_SERVICE_ACCOUNT_KEY."
       );
     }
   }
@@ -126,8 +127,8 @@ try {
   );
 
   console.error(
-    "FIREBASE_ADMIN_KEY PRESENT:",
-    Boolean(process.env.FIREBASE_ADMIN_KEY)
+    "FIREBASE_SERVICE_ACCOUNT_KEY PRESENT:",
+Boolean(process.env.FIREBASE_SERVICE_ACCOUNT_KEY)
   );
 }
 
