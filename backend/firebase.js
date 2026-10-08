@@ -7,247 +7,132 @@ const {
   getApps,
 } = require("firebase-admin/app");
 
-const {
-  getFirestore,
-} = require("firebase-admin/firestore");
-
-const {
-  getAuth,
-} = require("firebase-admin/auth");
-
-
-/* =========================================================
-   LOAD FIREBASE SERVICE ACCOUNT
-========================================================= */
+const { getFirestore } = require("firebase-admin/firestore");
+const { getAuth } = require("firebase-admin/auth");
 
 function loadServiceAccount() {
-
-  let serviceAccount = null;
-
-  /*
-    OPTION 1
-    Base64 encoded service-account JSON
-    Recommended for Vercel
-  */
-
   const base64Key =
     process.env.FIREBASE_SERVICE_ACCOUNT_KEY_BASE64?.trim();
 
+  console.log(
+    "FIREBASE_SERVICE_ACCOUNT_KEY_BASE64 exists:",
+    Boolean(base64Key)
+  );
+
   if (base64Key) {
     try {
-
-      const decodedJson = Buffer
+      const json = Buffer
         .from(base64Key, "base64")
         .toString("utf8");
 
-      serviceAccount = JSON.parse(decodedJson);
+      const serviceAccount = JSON.parse(json);
 
       console.log(
-        "Firebase service account loaded from BASE64 environment variable."
+        "Firebase service account decoded successfully."
+      );
+      console.log(
+        "Firebase project:",
+        serviceAccount.project_id
       );
 
+      return serviceAccount;
     } catch (error) {
+      console.error(
+        "BASE64 FIREBASE KEY ERROR:",
+        error.message
+      );
 
       throw new Error(
-        "FIREBASE_SERVICE_ACCOUNT_KEY_BASE64 is invalid. " +
-        "Make sure it contains a Base64 encoded Firebase service-account JSON."
+        "FIREBASE_SERVICE_ACCOUNT_KEY_BASE64 could not be decoded."
       );
     }
   }
 
+  const jsonKey =
+    process.env.FIREBASE_SERVICE_ACCOUNT_KEY?.trim();
 
-  /*
-    OPTION 2
-    Normal JSON environment variable
+  console.log(
+    "FIREBASE_SERVICE_ACCOUNT_KEY exists:",
+    Boolean(jsonKey)
+  );
 
-    This keeps compatibility with your existing
-    FIREBASE_SERVICE_ACCOUNT_KEY.
-  */
-
-  else {
-
-    const inlineKey =
-      process.env.FIREBASE_SERVICE_ACCOUNT_KEY?.trim() ||
-      process.env.FIREBASE_ADMIN_KEY?.trim();
-
-    if (inlineKey) {
-
-      try {
-
-        serviceAccount = JSON.parse(inlineKey);
-
-        console.log(
-          "Firebase service account loaded from JSON environment variable."
-        );
-
-      } catch (error) {
-
-        throw new Error(
-          "FIREBASE_SERVICE_ACCOUNT_KEY is not valid JSON. " +
-          "Set it to the complete Firebase service-account JSON."
-        );
-      }
-    }
-  }
-
-
-  /*
-    OPTION 3
-    Local serviceAccountKey.json
-
-    Used during local development.
-  */
-
-  if (!serviceAccount) {
-
-    const configuredPath =
-      process.env.FIREBASE_SERVICE_ACCOUNT_PATH?.trim();
-
-    const credentialsPath = configuredPath
-      ? path.resolve(process.cwd(), configuredPath)
-      : path.join(
-          __dirname,
-          "serviceAccountKey.json"
-        );
-
+  if (jsonKey) {
     try {
-
-      serviceAccount = JSON.parse(
-        fs.readFileSync(
-          credentialsPath,
-          "utf8"
-        )
-      );
-
-      console.log(
-        "Firebase service account loaded from local JSON file."
-      );
-
+      return JSON.parse(jsonKey);
     } catch (error) {
+      console.error(
+        "FIREBASE JSON KEY ERROR:",
+        error.message
+      );
 
       throw new Error(
-        `Firebase service-account credentials could not be read from ${credentialsPath}. ` +
-        "Set FIREBASE_SERVICE_ACCOUNT_KEY_BASE64 or " +
-        "FIREBASE_SERVICE_ACCOUNT_KEY."
+        "FIREBASE_SERVICE_ACCOUNT_KEY is not valid JSON."
       );
     }
   }
 
-
-  /* =======================================================
-     VALIDATE SERVICE ACCOUNT
-  ======================================================= */
-
-  if (
-    !serviceAccount ||
-    serviceAccount.type !== "service_account" ||
-    !serviceAccount.project_id ||
-    !serviceAccount.client_email ||
-    !serviceAccount.private_key
-  ) {
-
-    throw new Error(
-      "Firebase service-account credentials are missing required fields: " +
-      "type, project_id, client_email, private_key."
-    );
-  }
-
-
-  return serviceAccount;
+  throw new Error(
+    "NO FIREBASE SERVICE ACCOUNT ENVIRONMENT VARIABLE FOUND."
+  );
 }
-
-
-/* =========================================================
-   FIREBASE INITIALIZATION
-========================================================= */
 
 let db = null;
 let adminAuth = null;
 let configurationError = null;
 
 try {
-
   const serviceAccount = loadServiceAccount();
 
-  console.log(
-    "Firebase project:",
-    serviceAccount.project_id
-  );
+  if (!serviceAccount.project_id) {
+    throw new Error("Firebase project_id is missing.");
+  }
 
-  console.log(
-    "Firebase client:",
-    serviceAccount.client_email
-  );
+  if (!serviceAccount.client_email) {
+    throw new Error("Firebase client_email is missing.");
+  }
+
+  if (!serviceAccount.private_key) {
+    throw new Error("Firebase private_key is missing.");
+  }
 
   if (getApps().length === 0) {
-
     initializeApp({
       credential: cert(serviceAccount),
     });
-
   }
 
   db = getFirestore();
-
   adminAuth = getAuth();
 
-
-  console.log(
-    "Firebase Admin initialized successfully."
-  );
-
-  console.log(
-    "Firestore initialized successfully."
-  );
+  console.log("====================================");
+  console.log("FIREBASE ADMIN INITIALIZED SUCCESSFULLY");
+  console.log("PROJECT:", serviceAccount.project_id);
+  console.log("FIRESTORE: READY");
+  console.log("====================================");
 
 } catch (error) {
 
   configurationError = error.message;
 
-  console.error(
-    "========== FIREBASE ADMIN INITIALIZATION FAILED =========="
-  );
+  console.error("====================================");
+  console.error("FIREBASE ADMIN INITIALIZATION FAILED");
+  console.error("ERROR:", error.message);
+  console.error("====================================");
 
   console.error(
-    "Error name:",
-    error.name
-  );
-
-  console.error(
-    "Error message:",
-    error.message
-  );
-
-  console.error(
-    "FIREBASE_SERVICE_ACCOUNT_KEY_BASE64 PRESENT:",
+    "BASE64 ENV PRESENT:",
     Boolean(
       process.env.FIREBASE_SERVICE_ACCOUNT_KEY_BASE64
     )
   );
 
   console.error(
-    "FIREBASE_SERVICE_ACCOUNT_KEY PRESENT:",
+    "JSON ENV PRESENT:",
     Boolean(
       process.env.FIREBASE_SERVICE_ACCOUNT_KEY
     )
   );
-
-  console.error(
-    "FIREBASE_ADMIN_KEY PRESENT:",
-    Boolean(
-      process.env.FIREBASE_ADMIN_KEY
-    )
-  );
-
-  console.error(
-    "=========================================================="
-  );
 }
-
-
-/* =========================================================
-   EXPORTS
-========================================================= */
 
 module.exports = {
   db,
