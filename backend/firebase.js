@@ -118,11 +118,16 @@ try {
     "Firebase Admin initialized successfully."
   );
 } catch (error) {
-  configurationError =
-    error.message;
+  configurationError = error.message;
 
-  console.warn(
-    `Firebase is not configured: ${configurationError}`
+  console.error(
+    "FIREBASE ADMIN INITIALIZATION FAILED:",
+    configurationError
+  );
+
+  console.error(
+    "FIREBASE_SERVICE_ACCOUNT_KEY PRESENT:",
+    Boolean(process.env.FIREBASE_SERVICE_ACCOUNT_KEY)
   );
 }
 
