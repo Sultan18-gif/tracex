@@ -1,17 +1,24 @@
-export const API_BASE_URL = (
-  import.meta.env.VITE_API_BASE_URL ||
-  "/api"
-).replace(/\/$/, "");
+/* =========================================================
+   TRACEX API CONFIGURATION
+   Frontend + Backend are served from the same URL
+========================================================= */
+
+export const API_BASE_URL = "/api";
 
 const API_URL = API_BASE_URL;
 
-async function apiRequest(endpoint, options = {}) {
+/* =========================================================
+   API REQUEST HELPER
+========================================================= */
+
+export async function apiRequest(endpoint, options = {}) {
   const response = await fetch(`${API_URL}${endpoint}`, {
+    ...options,
+
     headers: {
       "Content-Type": "application/json",
       ...(options.headers || {}),
     },
-    ...options,
   });
 
   let data = null;
@@ -32,24 +39,41 @@ async function apiRequest(endpoint, options = {}) {
 
   return data;
 }
+
+/* =========================================================
+   WALLETS
+========================================================= */
+
+export async function getWallets() {
+  return apiRequest("/wallets");
+}
+
 export async function getWallet(address) {
   if (!address) {
     return null;
   }
 
-  const wallets = await getWallets();
+  const data = await getWallets();
+
+  const wallets = Array.isArray(data)
+    ? data
+    : Array.isArray(data?.wallets)
+    ? data.wallets
+    : [];
 
   return (
     wallets.find(
       (wallet) =>
-        String(wallet.address).toLowerCase() ===
+        String(wallet.address || "").toLowerCase() ===
         String(address).toLowerCase()
     ) || null
   );
 }
 
+/* =========================================================
+   WALLET ANALYSIS
+========================================================= */
 
-// ADD THIS
 export async function analyzeWallet(walletAddress) {
   if (!walletAddress) {
     throw new Error("Wallet address is required.");

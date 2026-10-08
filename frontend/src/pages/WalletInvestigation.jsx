@@ -2,29 +2,29 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE_URL, analyzeWallet } from "../api";
 
-const demoWallet = {
-  address: "0x71C7656EC7ab88b098defB751B7401B5f6d8976F",
-  label: "Lazarus Group Suspect #4",
-  balance: "1,420.5 ETH ($4.82M)",
+const initialWallet = {
+  address: "",
+  label: "No wallet selected",
+  balance: "—",
   network: "Ethereum Mainnet",
-  firstSeen: "2024-03-12",
-  lastActive: "12 mins ago",
-  riskScore: 98,
-  tags: ["Tornado.Cash Depositor", "OFAC Sanctioned", "Phishing Drainer"],
+  firstSeen: "—",
+  lastActive: "—",
+  riskScore: 0,
+  tags: [],
   exposure: [
     {
       label: "Sanctioned mixers (Tornado)",
-      pct: 58,
+      pct: 0,
       color: "high",
     },
     {
       label: "DEX / DeFi pools",
-      pct: 27,
+      pct: 0,
       color: "info",
     },
     {
       label: "CEX off-ramps",
-      pct: 15,
+      pct: 0,
       color: "low",
     },
   ],
@@ -171,8 +171,8 @@ function calculateRisk(transactions = []) {
 export default function WalletInvestigation() {
   const navigate = useNavigate();
 
-  const [address, setAddress] = useState(demoWallet.address);
-  const [wallet, setWallet] = useState(demoWallet);
+  const [address, setAddress] = useState("");
+  const [wallet, setWallet] = useState(initialWallet);
   const [transactions, setTransactions] = useState([]);
   const [mlAnalysis, setMlAnalysis] = useState(null);
   const [analysisRun, setAnalysisRun] = useState(false);
@@ -184,15 +184,28 @@ export default function WalletInvestigation() {
   const analysis = useMemo(() => {
     if (!analysisRun) {
       return {
-        score: demoWallet.riskScore,
-        level: "Critical",
+        score: initialWallet.riskScore,
+        level: "Low",
         reason:
-          "High threat: severe exposure to sanctioned mixers and illicit drainer contracts.",
+          "Enter a wallet address to begin an investigation.",
+      };
+    }
+
+    // Prefer the server-side model result whenever it is available. The
+    // lightweight client calculation remains a useful fallback if the ML
+    // service is unavailable during an investigation.
+    if (mlAnalysis) {
+      return {
+        score: Number(mlAnalysis.riskScore) || 0,
+        level: mlAnalysis.riskLevel || "Low",
+        reason:
+          mlAnalysis.reasons?.join(" ") ||
+          "No major high-risk behavioral indicator detected.",
       };
     }
 
     return calculateRisk(transactions);
-  }, [analysisRun, transactions]);
+  }, [analysisRun, mlAnalysis, transactions]);
 
   const uniqueCounterparties = useMemo(() => {
     const values = new Set();
@@ -225,6 +238,49 @@ export default function WalletInvestigation() {
         : total;
     }, 0);
   }, [transactions]);
+
+  const exposureBreakdown = useMemo(() => {
+    const features = mlAnalysis?.features;
+    const asPercentage = (value) =>
+      Math.round(Math.min(1, Math.max(0, Number(value) || 0)) * 100);
+
+    const mixerPct = asPercentage(
+      Math.max(features?.sanction_exposure || 0, features?.mixer_exposure || 0)
+    );
+    const defiPct = asPercentage(
+      Math.min(1, (features?.dex_ratio || 0) + (features?.defi_ratio || 0))
+    );
+    const cexPct = asPercentage(features?.cex_ratio);
+    // Most addresses returned by a chain explorer have no reliable public
+    // attribution. Show that fact explicitly instead of leaving the visual
+    // empty or incorrectly assigning a wallet to an exchange/mixer.
+    const unattributedPct = transactions.length
+      ? Math.max(0, 100 - Math.min(100, mixerPct + defiPct + cexPct))
+      : 0;
+
+    return [
+      {
+        label: "Sanctioned mixers (Tornado)",
+        pct: mixerPct,
+        color: "high",
+      },
+      {
+        label: "DEX / DeFi pools",
+        pct: defiPct,
+        color: "info",
+      },
+      {
+        label: "CEX off-ramps",
+        pct: cexPct,
+        color: "low",
+      },
+      {
+        label: `Unattributed counterparties (${uniqueCounterparties})`,
+        pct: unattributedPct,
+        color: "info",
+      },
+    ];
+  }, [mlAnalysis, transactions.length, uniqueCounterparties]);
 
   const runDeepAnalysis = async () => {
     const targetAddress = address.trim();
@@ -291,7 +347,7 @@ export default function WalletInvestigation() {
       }
 
       setWallet({
-        ...demoWallet,
+        ...initialWallet,
         ...analyzedWallet,
         address: analyzedWallet.address || targetAddress,
         label: analyzedWallet.label || "Tracked wallet",
@@ -340,9 +396,9 @@ export default function WalletInvestigation() {
     }
 
     navigate(
-      `/network?wallet=${encodeURIComponent(
-        wallet.address
-      )}`
+      `/network?wallet=${encodeURIComponent(wallet.address)}&riskScore=${encodeURIComponent(
+        analysis.score
+      )}&riskLevel=${encodeURIComponent(analysis.level)}`
     );
   };
 
@@ -584,6 +640,7 @@ export default function WalletInvestigation() {
         investigation: {
           wallet,
           risk: analysis,
+          mlAnalysis,
           transactionCount: transactions.length,
           uniqueCounterparties,
           totalTransferred,
@@ -746,16 +803,20 @@ export default function WalletInvestigation() {
                 AI / ML fraud analysis
               </p>
               <p className="cs-row-subtext" style={{ marginTop: "5px" }}>
-                Isolation Forest anomaly detection based on observed blockchain transaction behaviour.
+                Random Forest risk classification and Isolation Forest anomaly detection based on observed wallet behaviour.
               </p>
             </div>
 
             <span
               className={`cs-badge ${
-                mlAnalysis.anomaly ? "cs-badge-high" : "cs-badge-low"
+                ["Critical", "High"].includes(mlAnalysis.riskLevel)
+                  ? "cs-badge-high"
+                  : mlAnalysis.riskLevel === "Medium"
+                    ? "cs-badge-medium"
+                    : "cs-badge-low"
               }`}
             >
-              {mlAnalysis.anomaly ? "Anomaly detected" : "No anomaly detected"}
+              {mlAnalysis.riskLevel ?? "Low"} risk
             </span>
           </div>
 
@@ -769,8 +830,8 @@ export default function WalletInvestigation() {
           >
             <div className="cs-action-row">
               <div>
-                <p className="cs-row-subtext">ML anomaly score</p>
-                <p className="cs-row-title">{mlAnalysis.score ?? 0} / 100</p>
+                <p className="cs-row-subtext">ML risk score</p>
+                <p className="cs-row-title">{mlAnalysis.riskScore ?? 0} / 100</p>
               </div>
             </div>
 
@@ -778,61 +839,61 @@ export default function WalletInvestigation() {
               <div>
                 <p className="cs-row-subtext">Transactions analyzed</p>
                 <p className="cs-row-title">
-                  {mlAnalysis.features?.transactionCount ?? 0}
+                  {mlAnalysis.features?.tx_count ?? 0}
                 </p>
               </div>
             </div>
 
             <div className="cs-action-row">
               <div>
-                <p className="cs-row-subtext">Unique receivers</p>
+                <p className="cs-row-subtext">Fraud probability</p>
                 <p className="cs-row-title">
-                  {mlAnalysis.features?.uniqueReceivers ?? 0}
+                  {mlAnalysis.mlFraudProbability ?? 0}%
                 </p>
               </div>
             </div>
 
             <div className="cs-action-row">
               <div>
-                <p className="cs-row-subtext">Zero-value transactions</p>
+                <p className="cs-row-subtext">Anomaly score</p>
                 <p className="cs-row-title">
-                  {mlAnalysis.features?.zeroValueTransactions ?? 0}
+                  {mlAnalysis.anomalyScore ?? 0}%
                 </p>
               </div>
             </div>
 
             <div className="cs-action-row">
               <div>
-                <p className="cs-row-subtext">Rapid transactions</p>
+                <p className="cs-row-subtext">Unique counterparties</p>
                 <p className="cs-row-title">
-                  {mlAnalysis.features?.rapidTransactions ?? 0}
+                  {mlAnalysis.features?.unique_counterparties ?? 0}
                 </p>
               </div>
             </div>
 
             <div className="cs-action-row">
               <div>
-                <p className="cs-row-subtext">Mixer interactions</p>
+                <p className="cs-row-subtext">Rapid transfer ratio</p>
                 <p className="cs-row-title">
-                  {mlAnalysis.features?.mixerInteractions ?? 0}
+                  {((mlAnalysis.features?.rapid_transfer_ratio ?? 0) * 100).toFixed(1)}%
                 </p>
               </div>
             </div>
 
             <div className="cs-action-row">
               <div>
-                <p className="cs-row-subtext">Bridge interactions</p>
+                <p className="cs-row-subtext">Mixer exposure</p>
                 <p className="cs-row-title">
-                  {mlAnalysis.features?.bridgeInteractions ?? 0}
+                  {((mlAnalysis.features?.mixer_exposure ?? 0) * 100).toFixed(1)}%
                 </p>
               </div>
             </div>
 
             <div className="cs-action-row">
               <div>
-                <p className="cs-row-subtext">Intermediary hops</p>
+                <p className="cs-row-subtext">Model confidence</p>
                 <p className="cs-row-title">
-                  {mlAnalysis.features?.intermediaryHops ?? 0}
+                  {mlAnalysis.modelConfidence ?? 0}%
                 </p>
               </div>
             </div>
@@ -937,7 +998,13 @@ export default function WalletInvestigation() {
             Counterparty exposure breakdown
           </p>
 
-          {demoWallet.exposure.map((row) => (
+          {analysisRun && transactions.length > 0 && (
+            <p className="cs-row-subtext" style={{ margin: "-2px 0 12px" }}>
+              Public attribution is unavailable for some wallet addresses; unclassified activity is shown separately and is not a risk label.
+            </p>
+          )}
+
+          {exposureBreakdown.map((row) => (
             <div className="cs-exposure-row" key={row.label}>
               <div className="cs-exposure-label">
                 <span>{row.label}</span>

@@ -1,16 +1,22 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { signInWithEmailAndPassword } from "firebase/auth";
-
 import {
-  startAuthentication,
-  startRegistration,
-} from "@simplewebauthn/browser";
+  signInWithEmailAndPassword,
+  signOut,
+} from "firebase/auth";
+
+import { startAuthentication } from "@simplewebauthn/browser";
 
 import { auth } from "../firebase";
 import { API_BASE_URL } from "../api";
+
 import * as faceapi from "@vladmandic/face-api";
+
 import "../styles/theme.css";
+
+/* =========================================================
+   FACE API CONFIGURATION
+   ========================================================= */
 
 const FACE_MODEL_URL =
   "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/model";
@@ -18,1136 +24,1816 @@ const FACE_MODEL_URL =
 let faceModelsLoaded = false;
 let faceModelsPromise = null;
 
-async function loadFaceModels() {
-  if (faceModelsLoaded) return;
+/* =========================================================
+   LOAD FACE MODELS
+   ========================================================= */
 
-  if (!faceModelsPromise) {
-    faceModelsPromise = Promise.all([
-      faceapi.nets.tinyFaceDetector.loadFromUri(FACE_MODEL_URL),
-      faceapi.nets.faceLandmark68Net.loadFromUri(FACE_MODEL_URL),
-      faceapi.nets.faceRecognitionNet.loadFromUri(FACE_MODEL_URL),
-    ]);
+async function loadFaceModels() {
+  if (faceModelsLoaded) {
+    return;
   }
 
-  await faceModelsPromise;
-  faceModelsLoaded = true;
+  if (faceModelsPromise) {
+    return faceModelsPromise;
+  }
+
+  faceModelsPromise = (async () => {
+    await faceapi.nets.tinyFaceDetector.loadFromUri(
+      FACE_MODEL_URL
+    );
+
+    await faceapi.nets.faceLandmark68Net.loadFromUri(
+      FACE_MODEL_URL
+    );
+
+    await faceapi.nets.faceRecognitionNet.loadFromUri(
+      FACE_MODEL_URL
+    );
+
+    faceModelsLoaded = true;
+  })();
+
+  try {
+    await faceModelsPromise;
+  } catch (error) {
+    faceModelsPromise = null;
+    faceModelsLoaded = false;
+    throw error;
+  }
 }
 
-function averageDescriptors(descriptors) {
-  const result = new Array(descriptors[0].length).fill(0);
 
-  for (const descriptor of descriptors) {
-    for (let i = 0; i < descriptor.length; i++) {
-      result[i] += descriptor[i];
-    }
+/* =========================================================
+   FACE STORAGE
+   ========================================================= */
+
+function getFaceStorageKey(email) {
+  return `chainSentryFace:${email
+    .trim()
+    .toLowerCase()}`;
+}
+
+
+/* =========================================================
+   DESCRIPTOR VALIDATION
+   ========================================================= */
+
+function isValidFaceDescriptor(value) {
+  if (!value) {
+    return false;
   }
 
-  for (let i = 0; i < result.length; i++) {
-    result[i] /= descriptors.length;
+  if (
+    !(Array.isArray(value) ||
+      value instanceof Float32Array)
+  ) {
+    return false;
+  }
+
+  if (value.length !== 128) {
+    return false;
+  }
+
+  return Array.from(value).every(
+    (number) =>
+      typeof number === "number" &&
+      Number.isFinite(number)
+  );
+}
+
+
+/* =========================================================
+   AVERAGE FACE DESCRIPTORS
+   ========================================================= */
+
+function averageDescriptors(descriptors) {
+  const validDescriptors = descriptors.filter(
+    isValidFaceDescriptor
+  );
+
+  if (validDescriptors.length === 0) {
+    throw new Error(
+      "No valid face descriptors were captured."
+    );
+  }
+
+  const result = new Float32Array(128);
+
+  for (let i = 0; i < 128; i++) {
+    let total = 0;
+
+    for (const descriptor of validDescriptors) {
+      total += Number(descriptor[i]);
+    }
+
+    result[i] =
+      total / validDescriptors.length;
   }
 
   return result;
 }
 
-function FaceRecognition({ email, mode, onSuccess, onClose }) {
+
+/* =========================================================
+   SAVE FACE PROFILE
+   ========================================================= */
+
+function saveFaceDescriptor(email, descriptor) {
+  if (!isValidFaceDescriptor(descriptor)) {
+    throw new Error(
+      "The captured face profile is invalid."
+    );
+  }
+
+  const key = getFaceStorageKey(email);
+
+  const profile = {
+    version: 1,
+    descriptor: Array.from(descriptor),
+    createdAt: new Date().toISOString(),
+  };
+
+  localStorage.setItem(
+    key,
+    JSON.stringify(profile)
+  );
+
+  console.log(
+    "FACE PROFILE SAVED:",
+    key
+  );
+
+  console.log(
+    "FACE DESCRIPTOR LENGTH:",
+    descriptor.length
+  );
+}
+
+
+/* =========================================================
+   LOAD FACE PROFILE
+   ========================================================= */
+
+function loadSavedFaceDescriptor(email) {
+  const key = getFaceStorageKey(email);
+
+  const raw = localStorage.getItem(key);
+
+  if (!raw) {
+    throw new Error(
+      "No face profile is registered for this email. Please register your face first."
+    );
+  }
+
+  let saved;
+
+  try {
+    saved = JSON.parse(raw);
+  } catch (error) {
+    console.error(
+      "FACE PROFILE JSON ERROR:",
+      error
+    );
+
+    localStorage.removeItem(key);
+
+    throw new Error(
+      "Saved face profile is corrupted. Please register your face again."
+    );
+  }
+
+
+  /* -------------------------------------------------------
+     FORMAT 1
+
+     Direct array:
+     [0.12, -0.23, ...]
+     ------------------------------------------------------- */
+
+  if (isValidFaceDescriptor(saved)) {
+    return new Float32Array(saved);
+  }
+
+
+  /* -------------------------------------------------------
+     FORMAT 2
+
+     {
+       descriptor: [...]
+     }
+     ------------------------------------------------------- */
+
+  if (
+    saved &&
+    isValidFaceDescriptor(saved.descriptor)
+  ) {
+    return new Float32Array(
+      saved.descriptor
+    );
+  }
+
+
+  /* -------------------------------------------------------
+     FORMAT 3
+
+     {
+       descriptors: [
+         [...],
+         [...],
+         [...]
+       ]
+     }
+     ------------------------------------------------------- */
+
+  if (
+    saved &&
+    Array.isArray(saved.descriptors)
+  ) {
+    const validDescriptors =
+      saved.descriptors.filter(
+        isValidFaceDescriptor
+      );
+
+    if (validDescriptors.length > 0) {
+      const averaged =
+        averageDescriptors(
+          validDescriptors
+        );
+
+      if (
+        isValidFaceDescriptor(averaged)
+      ) {
+        return averaged;
+      }
+    }
+  }
+
+
+  /* -------------------------------------------------------
+     FORMAT 4
+
+     {
+       faceDescriptor: [...]
+     }
+     ------------------------------------------------------- */
+
+  if (
+    saved &&
+    isValidFaceDescriptor(
+      saved.faceDescriptor
+    )
+  ) {
+    return new Float32Array(
+      saved.faceDescriptor
+    );
+  }
+
+
+  /*
+   * Invalid old profile.
+   */
+
+  localStorage.removeItem(key);
+
+  throw new Error(
+    "Saved face profile is empty or invalid. Please register your face again."
+  );
+}
+
+
+/* =========================================================
+   FACE RECOGNITION COMPONENT
+   ========================================================= */
+
+export function FaceRecognition({
+  email,
+  mode,
+  onSuccess,
+  onClose,
+}) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
-  const [status, setStatus] = useState("Loading face recognition...");
-  const [cameraReady, setCameraReady] = useState(false);
- const [processing, setProcessing] = useState(false);
-const autoCaptureRef = useRef(false);
-  const [cameraError, setCameraError] = useState("");
+
+  const cancelledRef = useRef(false);
+  const processingRef = useRef(false);
+
+  const [cameraReady, setCameraReady] =
+    useState(false);
+
+  const [modelsReady, setModelsReady] =
+    useState(false);
+
+  const [processing, setProcessing] =
+    useState(false);
+
+  const [status, setStatus] =
+    useState("Preparing face recognition...");
+
+  const [error, setError] =
+    useState("");
+
+  const [capturedDescriptors, setCapturedDescriptors] =
+    useState([]);
+
+
+  /* =======================================================
+     START CAMERA
+     ======================================================= */
 
   useEffect(() => {
+    cancelledRef.current = false;
+
     let mounted = true;
 
-    const start = async () => {
+    const startCamera = async () => {
       try {
-        setStatus("Loading face recognition models...");
+        setError("");
+        setStatus(
+          "Loading face recognition models..."
+        );
+
         await loadFaceModels();
 
-        if (!mounted) return;
+        if (!mounted) {
+          return;
+        }
 
-        setStatus("Opening camera...");
+        setModelsReady(true);
 
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: "user",
-            width: { ideal: 640 },
-            height: { ideal: 480 },
-          },
-          audio: false,
-        });
+        setStatus(
+          "Requesting camera access..."
+        );
+
+        const stream =
+          await navigator.mediaDevices.getUserMedia(
+            {
+              video: {
+                facingMode: "user",
+                width: {
+                  ideal: 640,
+                },
+                height: {
+                  ideal: 480,
+                },
+              },
+              audio: false,
+            }
+          );
 
         if (!mounted) {
-          stream.getTracks().forEach((track) => track.stop());
+          stream
+            .getTracks()
+            .forEach((track) =>
+              track.stop()
+            );
+
           return;
         }
 
         streamRef.current = stream;
-        videoRef.current.srcObject = stream;
 
-        await new Promise((resolve) => {
-          videoRef.current.onloadedmetadata = resolve;
-        });
+        if (videoRef.current) {
+          videoRef.current.srcObject =
+            stream;
 
-        await videoRef.current.play();
-        setCameraReady(true);
-        setStatus(
-          mode === "register"
-             ? "Look at the camera. Your face will be registered automatically."
-    : "Look at the camera."
+          await videoRef.current.play();
+
+          setCameraReady(true);
+
+          setStatus(
+            mode === "register"
+              ? "Position your face inside the guide."
+              : "Looking for your face..."
+          );
+        }
+      } catch (cameraError) {
+        console.error(
+          "FACE CAMERA ERROR:",
+          cameraError
         );
-      } catch (error) {
-        console.error("FACE CAMERA ERROR:", error);
-        setCameraError(
-          error.name === "NotAllowedError"
-            ? "Camera permission was denied. Allow camera access and try again."
-            : error.name === "NotFoundError"
-            ? "No camera was found. Connect a webcam and try again."
-            : error.message || "Unable to start face recognition."
+
+        if (!mounted) {
+          return;
+        }
+
+        if (
+          cameraError?.name ===
+          "NotAllowedError"
+        ) {
+          setError(
+            "Camera permission was denied. Please allow camera access and try again."
+          );
+        } else if (
+          cameraError?.name ===
+          "NotFoundError"
+        ) {
+          setError(
+            "No camera was found on this device."
+          );
+        } else {
+          setError(
+            cameraError?.message ||
+              "Unable to start face recognition."
+          );
+        }
+
+        setStatus(
+          "Face recognition could not start."
         );
       }
     };
 
-    start();
+    startCamera();
 
     return () => {
       mounted = false;
+      cancelledRef.current = true;
+
       if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current
+          .getTracks()
+          .forEach((track) =>
+            track.stop()
+          );
+
         streamRef.current = null;
+      }
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
       }
     };
   }, [mode]);
 
-  const detectFace = async () => {
-    const detections = await faceapi
-      .detectAllFaces(
-        videoRef.current,
-        new faceapi.TinyFaceDetectorOptions({
-          inputSize: 320,
-          scoreThreshold: 0.5,
-        })
-      )
-      .withFaceLandmarks()
-      .withFaceDescriptors();
 
-    if (detections.length === 0) {
-      throw new Error("No face detected. Move closer and look at the camera.");
-    }
+  /* =======================================================
+     REGISTER FACE
+     Automatically captures 3 good samples.
+     ======================================================= */
 
-    if (detections.length > 1) {
-      throw new Error("Only one face should be visible.");
-    }
-
-    return detections[0].descriptor;
-  };
-
-  const sleep = (ms) =>
-    new Promise((resolve) => setTimeout(resolve, ms));
-
- const handleRegister = async () => {
-  if (processing || autoCaptureRef.current) return;
-
-  try {
-    autoCaptureRef.current = true;
-    setProcessing(true);
-
-    const descriptors = [];
-
-    for (let i = 0; i < 3; i++) {
-      setStatus(`Face detected. Capturing ${i + 1} of 3...`);
-
-      descriptors.push(
-        Array.from(await detectFace())
-      );
-
-      if (i < 2) {
-        await sleep(700);
-      }
-    }
-
-    const descriptor = averageDescriptors(descriptors);
-
-    const key =
-      `chainSentryFace:${email.trim().toLowerCase()}`;
-
-    localStorage.setItem(
-      key,
-      JSON.stringify({
-        descriptor,
-        createdAt: new Date().toISOString(),
-      })
-    );
-
-    setStatus("Face registered successfully.");
-
-    await sleep(500);
-
-    onSuccess({
-      type: "register",
-    });
-
-  } catch (error) {
-    console.error(
-      "FACE REGISTRATION ERROR:",
-      error
-    );
-
-    setStatus(
-      error.message ||
-      "Face registration failed."
-    );
-
-    autoCaptureRef.current = false;
-
-  } finally {
-    setProcessing(false);
-  }
-};
-useEffect(() => {
-  if (mode !== "register" || !cameraReady) {
-    return;
-  }
-
-  let cancelled = false;
-
-  const autoDetect = async () => {
-    if (cancelled || autoCaptureRef.current) {
+  useEffect(() => {
+    if (
+      mode !== "register" ||
+      !cameraReady ||
+      !modelsReady
+    ) {
       return;
     }
 
-    try {
-      const detections = await faceapi
-        .detectAllFaces(
-          videoRef.current,
-          new faceapi.TinyFaceDetectorOptions({
-            inputSize: 320,
-            scoreThreshold: 0.5,
-          })
-        )
-        .withFaceLandmarks()
-        .withFaceDescriptors();
+    let cancelled = false;
+    let timer = null;
 
-      if (cancelled || autoCaptureRef.current) {
+    const captureFace = async () => {
+      if (
+        cancelled ||
+        cancelledRef.current ||
+        processingRef.current
+      ) {
         return;
       }
 
-      if (detections.length === 1) {
-        setStatus("Face detected. Registering automatically...");
-
-        await handleRegister();
-
+      if (!videoRef.current) {
         return;
       }
 
-      if (detections.length === 0) {
-        setStatus(
-          "Look at the camera. Your face will be registered automatically."
-        );
-      }
-
-      if (detections.length > 1) {
-        setStatus(
-          "Only one face should be visible."
-        );
-      }
-
-    } catch (error) {
-      console.error(
-        "AUTO FACE DETECTION ERROR:",
-        error
-      );
-    }
-
-    if (!cancelled && !autoCaptureRef.current) {
-      setTimeout(autoDetect, 300);
-    }
-  };
-
-  autoDetect();
-
-  return () => {
-    cancelled = true;
-  };
-}, [mode, cameraReady]);
-useEffect(() => {
-  if (mode !== "login" || !cameraReady) {
-    return;
-  }
-
-  let cancelled = false;
-  let timer = null;
-
-  const autoVerify = async () => {
-    if (cancelled || autoCaptureRef.current || processing) {
-      return;
-    }
-
-    try {
-      const key =
-        `chainSentryFace:${email.trim().toLowerCase()}`;
-
-      const saved = localStorage.getItem(key);
-
-      if (!saved) {
-        setStatus(
-          "No face is registered for this email."
-        );
+      if (
+        videoRef.current.readyState < 2
+      ) {
         return;
       }
 
-      const stored = JSON.parse(saved);
-      const storedDescriptor =
-        new Float32Array(stored.descriptor);
-
-      const detections = await faceapi
-        .detectAllFaces(
-          videoRef.current,
-          new faceapi.TinyFaceDetectorOptions({
-            inputSize: 320,
-            scoreThreshold: 0.5,
-          })
-        )
-        .withFaceLandmarks()
-        .withFaceDescriptors();
-
-      if (cancelled) return;
-
-      if (detections.length === 0) {
-        setStatus("Look at the camera.");
-      } else if (detections.length > 1) {
-        setStatus("Only one face should be visible.");
-      } else {
-        autoCaptureRef.current = true;
-        setProcessing(true);
-
-        setStatus("Face detected. Verifying automatically...");
-
-        const distances = [];
-
-        for (let i = 0; i < 3; i++) {
-          if (cancelled) return;
-
-          setStatus(
-            `Verifying face ${i + 1} of 3...`
-          );
-
-          const detection = await faceapi
+      try {
+        const detection =
+          await faceapi
             .detectSingleFace(
               videoRef.current,
-              new faceapi.TinyFaceDetectorOptions({
-                inputSize: 320,
-                scoreThreshold: 0.5,
-              })
+              new faceapi.TinyFaceDetectorOptions(
+                {
+                  inputSize: 320,
+                  scoreThreshold: 0.5,
+                }
+              )
             )
             .withFaceLandmarks()
             .withFaceDescriptor();
 
-          if (!detection) {
-            throw new Error(
-              "Face moved. Please look at the camera."
+        if (cancelled) {
+          return;
+        }
+
+        if (!detection) {
+          setStatus(
+            "Position your face inside the guide."
+          );
+
+          timer = setTimeout(
+            captureFace,
+            700
+          );
+
+          return;
+        }
+
+        if (!detection.descriptor) {
+          setStatus(
+            "Unable to read your face. Please try again."
+          );
+
+          timer = setTimeout(
+            captureFace,
+            700
+          );
+
+          return;
+        }
+
+        const descriptor =
+          Array.from(
+            detection.descriptor
+          );
+
+        setCapturedDescriptors(
+          (previous) => {
+            const updated = [
+              ...previous,
+              descriptor,
+            ];
+
+            const sampleNumber =
+              Math.min(
+                updated.length,
+                3
+              );
+
+            setStatus(
+              `Capturing face sample ${sampleNumber} of 3...`
             );
+
+            if (
+              updated.length >= 3
+            ) {
+              processingRef.current = true;
+              setProcessing(true);
+
+              try {
+                const averaged =
+                  averageDescriptors(
+                    updated
+                  );
+
+                saveFaceDescriptor(
+                  email,
+                  averaged
+                );
+
+                setStatus(
+                  "Face registered successfully."
+                );
+
+                setTimeout(() => {
+                  if (
+                    !cancelled &&
+                    !cancelledRef.current
+                  ) {
+                    onSuccess?.({
+                      type: "register",
+                      descriptor:
+                        Array.from(
+                          averaged
+                        ),
+                    });
+                  }
+                }, 700);
+              } catch (registrationError) {
+                console.error(
+                  "FACE REGISTRATION ERROR:",
+                  registrationError
+                );
+
+                processingRef.current =
+                  false;
+
+                setProcessing(false);
+
+                setError(
+                  registrationError
+                    ?.message ||
+                    "Face registration failed."
+                );
+              }
+
+              return updated;
+            }
+
+            return updated;
           }
-
-          distances.push(
-            faceapi.euclideanDistance(
-              storedDescriptor,
-              detection.descriptor
-            )
-          );
-
-          if (i < 2) {
-            await sleep(700);
-          }
-        }
-
-        const matches = distances.filter(
-          (distance) => distance <= 0.5
-        ).length;
-
-        console.log("Face distances:", distances);
-
-        if (matches < 2) {
-          throw new Error(
-            "Face verification failed. Please try again."
-          );
-        }
-
-        setStatus("Face verified successfully.");
-
-        await sleep(500);
-
-        onSuccess({
-          type: "login",
-        });
-      }
-    } catch (error) {
-      console.error(
-        "AUTOMATIC FACE LOGIN ERROR:",
-        error
-      );
-
-      autoCaptureRef.current = false;
-      setProcessing(false);
-
-      setStatus(
-        error.message ||
-          "Face verification failed."
-      );
-    }
-  };
-
-  autoVerify();
-
-  timer = setInterval(autoVerify, 500);
-
-  return () => {
-    cancelled = true;
-
-    if (timer) {
-      clearInterval(timer);
-    }
-  };
-}, [mode, cameraReady]);
-  const handleVerify = async () => {
-    if (processing) return;
-
-    try {
-      const key = `chainSentryFace:${email.trim().toLowerCase()}`;
-      const saved = localStorage.getItem(key);
-
-      if (!saved) {
-        throw new Error("No face is registered for this email. Register your face first.");
-      }
-
-      const stored = JSON.parse(saved);
-      const storedDescriptor = new Float32Array(stored.descriptor);
-      const distances = [];
-
-      setProcessing(true);
-
-      for (let i = 0; i < 3; i++) {
-        setStatus(`Verifying face ${i + 1} of 3...`);
-
-        const current = await detectFace();
-        distances.push(
-          faceapi.euclideanDistance(storedDescriptor, current)
         );
 
-        await sleep(700);
+        /*
+         * Give the camera a short moment before
+         * capturing the next sample.
+         */
+
+        if (
+          !processingRef.current
+        ) {
+          timer = setTimeout(
+            captureFace,
+            850
+          );
+        }
+      } catch (captureError) {
+        console.error(
+          "FACE CAPTURE ERROR:",
+          captureError
+        );
+
+        if (!cancelled) {
+          setStatus(
+            "Face detection failed. Please keep your face visible."
+          );
+
+          timer = setTimeout(
+            captureFace,
+            800
+          );
+        }
       }
+    };
 
-      const matches = distances.filter((distance) => distance <= 0.5).length;
+    captureFace();
 
-      console.log("Face distances:", distances);
+    return () => {
+      cancelled = true;
 
-      if (matches < 2) {
-        throw new Error("Face verification failed. Please try again.");
+      if (timer) {
+        clearTimeout(timer);
       }
+    };
+  }, [
+    mode,
+    cameraReady,
+    modelsReady,
+    email,
+    onSuccess,
+  ]);
 
-      setStatus("Face verified successfully.");
-      await sleep(500);
-      onSuccess({ type: "login" });
-    } catch (error) {
-      console.error("FACE VERIFICATION ERROR:", error);
-      setStatus(error.message || "Face verification failed.");
-    } finally {
-      setProcessing(false);
+
+  /* =======================================================
+     AUTOMATIC FACE LOGIN
+     ======================================================= */
+
+  useEffect(() => {
+    if (
+      mode !== "login" ||
+      !cameraReady ||
+      !modelsReady
+    ) {
+      return;
     }
+
+    let cancelled = false;
+    let timer = null;
+
+    const autoVerify = async () => {
+      if (
+        cancelled ||
+        cancelledRef.current ||
+        processingRef.current
+      ) {
+        return;
+      }
+
+      if (!videoRef.current) {
+        return;
+      }
+
+      if (
+        videoRef.current.readyState < 2
+      ) {
+        timer = setTimeout(
+          autoVerify,
+          700
+        );
+
+        return;
+      }
+
+      try {
+        /*
+         * Load and validate the stored face profile.
+         */
+
+        const savedDescriptor =
+          loadSavedFaceDescriptor(
+            email
+          );
+
+        if (
+          !isValidFaceDescriptor(
+            savedDescriptor
+          )
+        ) {
+          throw new Error(
+            "Saved face profile is invalid. Please register your face again."
+          );
+        }
+
+        setStatus(
+          "Looking for your face..."
+        );
+
+        const detection =
+          await faceapi
+            .detectSingleFace(
+              videoRef.current,
+              new faceapi.TinyFaceDetectorOptions(
+                {
+                  inputSize: 320,
+                  scoreThreshold: 0.5,
+                }
+              )
+            )
+            .withFaceLandmarks()
+            .withFaceDescriptor();
+
+        if (
+          cancelled ||
+          cancelledRef.current
+        ) {
+          return;
+        }
+
+        if (!detection) {
+          setStatus(
+            "Position your face inside the guide."
+          );
+
+          timer = setTimeout(
+            autoVerify,
+            600
+          );
+
+          return;
+        }
+
+        if (!detection.descriptor) {
+          setStatus(
+            "Unable to read your face."
+          );
+
+          timer = setTimeout(
+            autoVerify,
+            700
+          );
+
+          return;
+        }
+
+        /*
+         * Compare saved descriptor with
+         * the live camera descriptor.
+         */
+
+        const distance =
+          faceapi.euclideanDistance(
+            savedDescriptor,
+            detection.descriptor
+          );
+
+        console.log(
+          "FACE MATCH DISTANCE:",
+          distance
+        );
+
+        /*
+         * Lower distance = stronger match.
+         *
+         * 0.50 is a reasonable starting point.
+         */
+
+        if (distance > 0.5) {
+          setStatus(
+            "Face does not match. Look directly at the camera."
+          );
+
+          timer = setTimeout(
+            autoVerify,
+            800
+          );
+
+          return;
+        }
+
+        /*
+         * FACE VERIFIED
+         */
+
+        processingRef.current = true;
+
+        setProcessing(true);
+
+        setStatus(
+          "Face verified successfully."
+        );
+
+        console.log(
+          "FACE LOGIN SUCCESSFUL"
+        );
+
+        await new Promise(
+          (resolve) =>
+            setTimeout(resolve, 600)
+        );
+
+        if (
+          !cancelled &&
+          !cancelledRef.current
+        ) {
+          onSuccess?.({
+            type: "login",
+            distance,
+          });
+        }
+      } catch (verificationError) {
+        console.error(
+          "AUTOMATIC FACE LOGIN ERROR:",
+          verificationError
+        );
+
+        processingRef.current = false;
+        setProcessing(false);
+
+        /*
+         * If there is no valid profile, don't
+         * continuously throw the same error.
+         */
+
+        if (
+          verificationError?.message?.includes(
+            "No face profile"
+          ) ||
+          verificationError?.message?.includes(
+            "Saved face profile"
+          )
+        ) {
+          setError(
+            verificationError.message
+          );
+
+          setStatus(
+            "Face registration is required."
+          );
+
+          return;
+        }
+
+        setStatus(
+          verificationError?.message ||
+            "Face verification failed. Please try again."
+        );
+
+        timer = setTimeout(
+          autoVerify,
+          1000
+        );
+      }
+    };
+
+    autoVerify();
+
+    return () => {
+      cancelled = true;
+
+      if (timer) {
+        clearTimeout(timer);
+      }
+    };
+  }, [
+    mode,
+    cameraReady,
+    modelsReady,
+    email,
+    onSuccess,
+  ]);
+
+
+  /* =======================================================
+     CLOSE
+     ======================================================= */
+
+  const handleClose = () => {
+    cancelledRef.current = true;
+
+    if (streamRef.current) {
+      streamRef.current
+        .getTracks()
+        .forEach((track) =>
+          track.stop()
+        );
+
+      streamRef.current = null;
+    }
+
+    onClose?.();
   };
+
+
+  /* =======================================================
+     UI
+     ======================================================= */
 
   return (
     <div className="face-auth-overlay">
-      <style>{`
-        .face-auth-overlay { position:fixed; inset:0; z-index:9999; display:flex; align-items:center; justify-content:center; padding:20px; background:rgba(2,7,12,.88); backdrop-filter:blur(8px); }
-        .face-auth-card { width:100%; max-width:540px; background:#0b1119; border:1px solid #1b2735; border-radius:14px; overflow:hidden; box-shadow:0 25px 80px rgba(0,0,0,.55); }
-        .face-auth-header { display:flex; justify-content:space-between; align-items:flex-start; padding:20px 22px; border-bottom:1px solid #1b2735; }
-        .face-auth-header h2 { margin:0; color:#e8ecf1; font-size:18px; }
-        .face-auth-header p { margin:5px 0 0; color:#7f93ac; font-size:12px; }
-        .face-auth-close { width:32px; height:32px; border:1px solid #263544; border-radius:7px; background:transparent; color:#7f93ac; font-size:20px; cursor:pointer; }
-        .face-camera-wrap { position:relative; aspect-ratio:4/3; background:#02070c; overflow:hidden; }
-        .face-camera { width:100%; height:100%; object-fit:cover; transform:scaleX(-1); display:block; }
-        .face-frame { position:absolute; width:45%; height:62%; left:27.5%; top:19%; border:2px solid #22d3ee; border-radius:45%; pointer-events:none; box-shadow:0 0 0 9999px rgba(0,0,0,.12); }
-        .face-camera-hint { position:absolute; bottom:12px; left:50%; transform:translateX(-50%); padding:7px 12px; border-radius:6px; background:rgba(2,7,12,.78); color:#e8ecf1; font-size:11px; white-space:nowrap; }
-        .face-auth-status { min-height:48px; display:flex; align-items:center; justify-content:center; padding:12px 20px; text-align:center; color:#a9b6c5; font-size:12px; }
-        .face-auth-actions { display:flex; gap:10px; padding:0 20px 18px; }
-        .face-auth-actions button { flex:1; }
-        .face-auth-security { padding:12px 20px; border-top:1px solid #1b2735; text-align:center; color:#687b91; font-size:10px; }
-      `}</style>
-
       <div className="face-auth-card">
+
+        {/* HEADER */}
+
         <div className="face-auth-header">
           <div>
-            <h2>{mode === "register" ? "Register Your Face" : "Face Verification"}</h2>
-            <p>{email}</p>
+            <h2>
+              {mode === "register"
+                ? "Register Face"
+                : "Face Verification"}
+            </h2>
+
+            <p>
+              {mode === "register"
+                ? "Secure your TraceX account with face recognition."
+                : "Verify your identity to continue."}
+            </p>
           </div>
-          <button type="button" className="face-auth-close" onClick={onClose} disabled={processing}>×</button>
+
+          <button
+            type="button"
+            className="face-auth-close"
+            onClick={handleClose}
+            disabled={processing}
+          >
+            ×
+          </button>
         </div>
 
-        <div className="face-camera-wrap">
-          <video ref={videoRef} autoPlay muted playsInline className="face-camera" />
-          <div className="face-frame"></div>
-          <div className="face-camera-hint">Keep only your face inside the frame</div>
+
+        {/* CAMERA */}
+
+        <div className="face-camera-container">
+          <video
+            ref={videoRef}
+            className="face-camera"
+            autoPlay
+            muted
+            playsInline
+          />
+
+          <div className="face-guide">
+
+            <div className="face-guide-corner top-left" />
+
+            <div className="face-guide-corner top-right" />
+
+            <div className="face-guide-corner bottom-left" />
+
+            <div className="face-guide-corner bottom-right" />
+
+            <div className="face-guide-text">
+              {mode === "register"
+                ? "Keep your face centered"
+                : "Look directly at the camera"}
+            </div>
+
+          </div>
         </div>
+
+
+        {/* STATUS */}
 
         <div className="face-auth-status">
-          {cameraError || status}
+          {status}
         </div>
+
+
+        {/* ERROR */}
+
+        {error && (
+          <div className="login-error face-auth-error">
+            <div className="login-error-icon">
+              !
+            </div>
+
+            <div>
+              {error}
+            </div>
+          </div>
+        )}
+
+
+        {/* ACTIONS */}
 
         <div className="face-auth-actions">
-  <button
-    type="button"
-    className="register-hello-button"
-    onClick={onClose}
-    disabled={processing}
-  >
-    Cancel
-  </button>
-</div>
+
+          <button
+            type="button"
+            className="register-hello-button"
+            onClick={handleClose}
+            disabled={processing}
+          >
+            Cancel
+          </button>
+
+        </div>
+
+
+        {/* SECURITY */}
 
         <div className="face-auth-security">
-          Face matching is processed in the browser for this demo.
+          <span className="security-dot" />
+
+          Face data is processed locally on this device.
         </div>
+
       </div>
     </div>
   );
 }
 
-function Login() {
+
+/* =========================================================
+   LOGIN COMPONENT
+   ========================================================= */
+
+export default function Login() {
   const navigate = useNavigate();
 
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [email, setEmail] =
+    useState("");
 
-  const [error, setError] = useState("");
+  const [password, setPassword] =
+    useState("");
 
-  const [loading, setLoading] = useState(false);
-  const [helloLoading, setHelloLoading] = useState(false);
-  const [faceMode, setFaceMode] = useState(null);
-  const [signupStep, setSignupStep] = useState(null);
-  /*
-  ============================================================
-  FIREBASE EMAIL/PASSWORD LOGIN
-  ============================================================
-  */
+  const [error, setError] =
+    useState("");
 
-  const handleSubmit = async (e) => {
-  e.preventDefault();
+  const [loading, setLoading] =
+    useState(false);
 
-  setError("");
+  const [helloLoading, setHelloLoading] =
+    useState(false);
 
-  if (!email.trim()) {
-    setError("Please enter your email.");
-    return;
-  }
+  const [faceMode, setFaceMode] =
+    useState(null);
 
-  try {
-    setHelloLoading(true);
+  const [biometricStep, setBiometricStep] =
+    useState(null);
 
-    const userEmail = email.trim().toLowerCase();
 
-    // 1. Get Windows Hello authentication options
-    const optionsResponse = await fetch(
-      `${API_BASE_URL}/webauthn/login/options`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          email: userEmail,
-        }),
-      }
-    );
+  /* =======================================================
+     FINISH LOGIN
+     ======================================================= */
 
-    const optionsData = await optionsResponse.json();
-
-    if (!optionsResponse.ok) {
-      throw new Error(
-        optionsData.error ||
-        "Fingerprint authentication is not registered."
-      );
-    }
-
-    // 2. Windows Hello / fingerprint
-    const authenticationResponse =
-      await startAuthentication({
-        optionsJSON: optionsData,
-      });
-
-    // 3. Verify fingerprint
-    const verifyResponse = await fetch(
-      `${API_BASE_URL}/webauthn/login/verify`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          email: userEmail,
-          response: authenticationResponse,
-        }),
-      }
-    );
-
-    const verifyData = await verifyResponse.json();
-
-    if (!verifyResponse.ok || !verifyData.verified) {
-      throw new Error(
-        verifyData.error ||
-        "Fingerprint authentication failed."
-      );
-    }
-
-    // 4. Fingerprint successful → automatically open face
-    setHelloLoading(false);
-    setFaceMode("login");
-
-  } catch (error) {
-    console.error("BIOMETRIC LOGIN ERROR:", error);
-
-    setHelloLoading(false);
-
-    if (error.name === "NotAllowedError") {
-      setError(
-        "Fingerprint authentication was cancelled or not completed."
-      );
-    } else {
-      setError(
-        error.message ||
-        "Biometric authentication failed."
-      );
-    }
-  }
-};
-  /*
-  ============================================================
-  WINDOWS HELLO LOGIN
-  ============================================================
-  */
-
-  const handleWindowsHello = async () => {
-    setError("");
-
-    if (!email) {
-      setError(
-        "Enter your email first, then use Windows Hello."
-      );
-      return;
-    }
-
-    try {
-      setHelloLoading(true);
-
-      const userEmail =
-        email.trim().toLowerCase();
-
-      console.log(
-        "Requesting Windows Hello authentication options..."
-      );
-
-      const optionsResponse = await fetch(
-        `${API_BASE_URL}/webauthn/login/options`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            email: userEmail,
-          }),
-        }
-      );
-
-      const optionsText =
-        await optionsResponse.text();
-
-      console.log(
-        "Authentication options:",
-        optionsResponse.status,
-        optionsText
-      );
-
-      let optionsData;
-
-      try {
-        optionsData = JSON.parse(optionsText);
-      } catch {
-        throw new Error(
-          `Backend returned an invalid response (${optionsResponse.status}).`
-        );
-      }
-
-      if (!optionsResponse.ok) {
-        throw new Error(
-          optionsData.error ||
-            "Windows Hello credential is not registered."
-        );
-      }
-
-      /*
-       * Start Windows Hello
-       */
-
-      const authenticationResponse =
-        await startAuthentication({
-          optionsJSON: optionsData,
-        });
-
-      console.log(
-        "Windows Hello authentication response received."
-      );
-
-      /*
-       * Verify authentication
-       */
-
-      const verifyResponse = await fetch(
-        `${API_BASE_URL}/webauthn/login/verify`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            email: userEmail,
-            response: authenticationResponse,
-          }),
-        }
-      );
-
-      const verifyText =
-        await verifyResponse.text();
-
-      console.log(
-        "Authentication verification:",
-        verifyResponse.status,
-        verifyText
-      );
-
-      let verifyData;
-
-      try {
-        verifyData = JSON.parse(verifyText);
-      } catch {
-        throw new Error(
-          `Backend verification returned an invalid response (${verifyResponse.status}).`
-        );
-      }
-
-      if (
-        !verifyResponse.ok ||
-        !verifyData.verified
-      ) {
-        throw new Error(
-          verifyData.error ||
-            "Windows Hello authentication failed."
-        );
-      }
-
-      /*
-       * Login successful
-       */
-
-      localStorage.setItem(
-        "authenticated",
-        "true"
-      );
-
-      navigate("/dashboard");
-    } catch (error) {
-      console.error(
-        "WINDOWS HELLO LOGIN ERROR:",
-        error
-      );
-
-      if (
-        error.name === "NotAllowedError"
-      ) {
-        setError(
-          "Windows Hello authentication was cancelled or not completed."
-        );
-      } else if (
-        error.message === "Failed to fetch"
-      ) {
-        setError(
-          "Cannot connect to the Chain Sentry backend. Make sure the backend is running on port 5001."
-        );
-      } else {
-        setError(
-          error.message ||
-            "Windows Hello authentication failed."
-        );
-      }
-    } finally {
-      setHelloLoading(false);
-    }
-  };
-
-  /*
-  ============================================================
-  WINDOWS HELLO REGISTRATION
-  ============================================================
-  */
-
- const handleRegisterWindowsHello = async () => {
-  setError("");
-
-  if (!email.trim()) {
-    setError(
-      "Enter your email first, then register fingerprint or Windows Hello."
-    );
-    return;
-  }
-
-  try {
-    setHelloLoading(true);
-
-    const userEmail = email.trim().toLowerCase();
-
-    const optionsResponse = await fetch(
-      `${API_BASE_URL}/webauthn/register/options`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          email: userEmail,
-        }),
-      }
-    );
-
-    const optionsText = await optionsResponse.text();
-
-    let optionsData;
-
-    try {
-      optionsData = JSON.parse(optionsText);
-    } catch {
-      throw new Error(
-        `Backend returned an invalid response (${optionsResponse.status}).`
-      );
-    }
-
-    if (!optionsResponse.ok) {
-      throw new Error(
-        optionsData.error ||
-          "Unable to create fingerprint registration options."
-      );
-    }
-
-    /*
-     * Start fingerprint / Windows Hello registration
-     */
-    const registrationResponse = await startRegistration({
-      optionsJSON: optionsData,
-    });
-
-    /*
-     * Verify registration
-     */
-    const verifyResponse = await fetch(
-      `${API_BASE_URL}/webauthn/register/verify`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          email: userEmail,
-          response: registrationResponse,
-        }),
-      }
-    );
-
-    const verifyText = await verifyResponse.text();
-
-    let verifyData;
-
-    try {
-      verifyData = JSON.parse(verifyText);
-    } catch {
-      throw new Error(
-        `Backend verification returned an invalid response (${verifyResponse.status}).`
-      );
-    }
-
-    if (!verifyResponse.ok || !verifyData.verified) {
-      throw new Error(
-        verifyData.error ||
-          "Fingerprint / Windows Hello registration failed."
-      );
-    }
-
-    /*
-     * Fingerprint registration completed.
-     * Now move directly to face registration.
-     */
-    setError("");
-    setSignupStep("face");
-
-    setFaceMode("register");
-  } catch (error) {
-    console.error(
-      "FINGERPRINT REGISTRATION ERROR:",
-      error
-    );
-
-    if (error.name === "NotAllowedError") {
-      setError(
-        "Fingerprint / Windows Hello registration was cancelled or not completed."
-      );
-    } else if (error.message === "Failed to fetch") {
-      setError(
-        "Cannot connect to the Chain Sentry backend. Make sure the backend is running on port 5001."
-      );
-    } else if (error.name === "InvalidStateError") {
-      setError(
-        "This device already has a TraceX passkey, but the server did not confirm it for this account. Remove the existing TraceX passkey from your device's passkey settings, then register again."
-      );
-    } else {
-      setError(
-        error.message ||
-          "Fingerprint / Windows Hello registration failed."
-      );
-    }
-  } finally {
-    setHelloLoading(false);
-  }
-};
-
-  /*
-  ============================================================
-  LOGIN UI
-  ============================================================
-  */
-const handleFaceSuccess = (result) => {
-  setFaceMode(null);
-
-  if (result.type === "register") {
-    setError("");
-
-    if (signupStep === "face") {
-      setSignupStep(null);
-
-      alert(
-        "Registration completed successfully!\n\nFingerprint and Face Recognition have both been registered."
-      );
-
-      return;
-    }
-
-    alert(
-      "Face registered successfully for this email."
-    );
-
-    return;
-  }
-
-  if (result.type === "login") {
+  const finishLogin = () => {
     localStorage.setItem(
       "authenticated",
       "true"
     );
 
     navigate("/dashboard");
-  }
-};
+  };
 
-const handleFaceClose = () => {
-  setFaceMode(null);
-};
+
+  /* =======================================================
+     WINDOWS HELLO LOGIN
+     ======================================================= */
+
+  const handleWindowsHelloLogin =
+    async () => {
+      setError("");
+
+      const userEmail =
+        email.trim().toLowerCase();
+
+      if (!userEmail) {
+        setError(
+          "Please enter your email address first."
+        );
+
+        return false;
+      }
+
+      try {
+        setHelloLoading(true);
+
+        setBiometricStep(
+          "windows-hello"
+        );
+
+        console.log(
+          "Starting Windows Hello authentication..."
+        );
+
+
+        /* ---------------------------------------------------
+           GET AUTHENTICATION OPTIONS
+           --------------------------------------------------- */
+
+        const optionsResponse =
+          await fetch(
+            `${API_BASE_URL}/webauthn/login/options`,
+            {
+              method: "POST",
+
+              headers: {
+                "Content-Type":
+                  "application/json",
+              },
+
+              body: JSON.stringify({
+                email: userEmail,
+              }),
+            }
+          );
+
+
+        const optionsText =
+          await optionsResponse.text();
+
+        let optionsData;
+
+        try {
+          optionsData =
+            JSON.parse(optionsText);
+        } catch {
+          throw new Error(
+            `Backend returned an invalid Windows Hello response (${optionsResponse.status}).`
+          );
+        }
+
+
+        if (!optionsResponse.ok) {
+          throw new Error(
+            optionsData?.error ||
+              "Windows Hello credential is not registered."
+          );
+        }
+
+
+        /* ---------------------------------------------------
+           WINDOWS HELLO / FINGERPRINT PROMPT
+           --------------------------------------------------- */
+
+        const authenticationResponse =
+          await startAuthentication({
+            optionsJSON: optionsData,
+          });
+
+
+        /* ---------------------------------------------------
+           VERIFY AUTHENTICATION
+           --------------------------------------------------- */
+
+        const verifyResponse =
+          await fetch(
+            `${API_BASE_URL}/webauthn/login/verify`,
+            {
+              method: "POST",
+
+              headers: {
+                "Content-Type":
+                  "application/json",
+              },
+
+              body: JSON.stringify({
+                email: userEmail,
+
+                response:
+                  authenticationResponse,
+              }),
+            }
+          );
+
+
+        const verifyText =
+          await verifyResponse.text();
+
+        let verifyData;
+
+        try {
+          verifyData =
+            JSON.parse(verifyText);
+        } catch {
+          throw new Error(
+            `Backend verification returned an invalid response (${verifyResponse.status}).`
+          );
+        }
+
+
+        if (
+          !verifyResponse.ok ||
+          !verifyData?.verified
+        ) {
+          throw new Error(
+            verifyData?.error ||
+              "Windows Hello authentication failed."
+          );
+        }
+
+
+        console.log(
+          "Windows Hello authentication successful."
+        );
+
+        console.log(
+          "Windows Hello verified."
+        );
+
+        return true;
+      } catch (helloError) {
+        console.error(
+          "WINDOWS HELLO LOGIN ERROR:",
+          helloError
+        );
+
+
+        if (
+          helloError?.name ===
+          "NotAllowedError"
+        ) {
+          setError(
+            "Windows Hello was cancelled or unavailable. Face verification will be attempted."
+          );
+        } else if (
+          helloError?.message ===
+          "Failed to fetch"
+        ) {
+          setError(
+            "Unable to connect to the TraceX backend. Face verification will be attempted."
+          );
+        } else {
+          /*
+           * We don't stop the entire login process here.
+           *
+           * The next step is automatic face verification.
+           */
+
+          console.warn(
+            "Windows Hello unavailable. Continuing with face verification."
+          );
+        }
+
+        return false;
+      } finally {
+        setHelloLoading(false);
+      }
+    };
+
+
+  /* =======================================================
+     MAIN SIGN IN
+     ======================================================= */
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+
+    setError("");
+
+    const userEmail =
+      email.trim().toLowerCase();
+
+
+    /* -------------------------------------------------------
+       VALIDATION
+       ------------------------------------------------------- */
+
+    if (!userEmail) {
+      setError(
+        "Please enter your email address."
+      );
+
+      return;
+    }
+
+    if (!password) {
+      setError(
+        "Please enter your password."
+      );
+
+      return;
+    }
+
+
+    try {
+      setLoading(true);
+
+      setBiometricStep(null);
+
+
+      /* -----------------------------------------------------
+         FIREBASE EMAIL + PASSWORD
+         ----------------------------------------------------- */
+
+      console.log(
+        "Starting Firebase authentication..."
+      );
+
+      await signInWithEmailAndPassword(
+        auth,
+        userEmail,
+        password
+      );
+
+      console.log(
+        "Firebase authentication successful."
+      );
+
+
+      setLoading(false);
+
+
+      /* -----------------------------------------------------
+         WINDOWS HELLO
+         ----------------------------------------------------- */
+
+      const helloVerified =
+        await handleWindowsHelloLogin();
+
+
+      if (helloVerified) {
+        console.log(
+          "Windows Hello verified."
+        );
+      }
+
+
+      /* -----------------------------------------------------
+         FACE VERIFICATION
+         ----------------------------------------------------- */
+
+      console.log(
+        "Starting automatic face verification..."
+      );
+
+      setBiometricStep("face");
+
+      setError("");
+
+      setFaceMode("login");
+
+    } catch (loginError) {
+      console.error(
+        "LOGIN ERROR:",
+        loginError
+      );
+
+
+      /* -----------------------------------------------------
+         FIREBASE ERRORS
+         ----------------------------------------------------- */
+
+      if (
+        loginError?.code ===
+        "auth/invalid-credential"
+      ) {
+        setError(
+          "Invalid email or password."
+        );
+      } else if (
+        loginError?.code ===
+        "auth/invalid-email"
+      ) {
+        setError(
+          "Please enter a valid email address."
+        );
+      } else if (
+        loginError?.code ===
+        "auth/user-not-found"
+      ) {
+        setError(
+          "No account was found with this email."
+        );
+      } else if (
+        loginError?.code ===
+        "auth/wrong-password"
+      ) {
+        setError(
+          "Incorrect password."
+        );
+      } else if (
+        loginError?.code ===
+        "auth/network-request-failed"
+      ) {
+        setError(
+          "Unable to reach Firebase. Check your internet connection and try again."
+        );
+      } else if (
+        loginError?.code ===
+        "auth/too-many-requests"
+      ) {
+        setError(
+          "Too many login attempts. Please wait and try again."
+        );
+      } else {
+        setError(
+          loginError?.message ||
+            "Login failed. Please try again."
+        );
+      }
+
+    } finally {
+      setLoading(false);
+    }
+  };
+
+
+  /* =======================================================
+     FACE SUCCESS
+     ======================================================= */
+
+  const handleFaceSuccess =
+    async (result) => {
+      console.log(
+        "FACE VERIFICATION RESULT:",
+        result
+      );
+
+      if (
+        !result ||
+        result.type !== "login"
+      ) {
+        return;
+      }
+
+      console.log(
+        "Face verification successful."
+      );
+
+
+      setFaceMode(null);
+
+      setBiometricStep(null);
+
+      setError("");
+
+      finishLogin();
+    };
+
+
+  /* =======================================================
+     FACE CLOSE
+     ======================================================= */
+
+  const handleFaceClose =
+    async () => {
+      console.log(
+        "Face verification cancelled."
+      );
+
+      setFaceMode(null);
+
+      setBiometricStep(null);
+
+      /*
+       * The password may already have authenticated
+       * Firebase. Since biometric verification wasn't
+       * completed, sign the Firebase session back out.
+       */
+
+      try {
+        await signOut(auth);
+      } catch (signOutError) {
+        console.error(
+          "SIGN OUT ERROR:",
+          signOutError
+        );
+      }
+
+      localStorage.removeItem(
+        "authenticated"
+      );
+
+      setError(
+        "Biometric verification was cancelled. Please sign in again."
+      );
+    };
+
+
+  /* =======================================================
+     CREATE ACCOUNT
+     ======================================================= */
+
+  const handleCreateAccount =
+    () => {
+      navigate("/signup");
+    };
+
+
+  /* =======================================================
+     UI
+     ======================================================= */
+
   return (
-    <div className="login-page">
+    <div
+      className={
+        "login-page cs-login-screen"
+      }
+    >
 
-      <div className="login-background-grid"></div>
+      {/* ===================================================
+          BACKGROUND
+          =================================================== */}
+
+      <div className="login-background-grid" />
+
+
+      {/* ===================================================
+          MAIN CONTAINER
+          =================================================== */}
 
       <div className="login-container">
 
-        {/* Logo / Brand */}
+        {/* =================================================
+            BRAND
+            ================================================= */}
 
-        <div className="login-brand">
-          <div className="login-logo">
-            CS
+        <div className="login-brand cs-login-brand">
+
+          <div className="login-logo cs-login-icon">
+            T
           </div>
 
-          <div>
-            <h1>Chain Sentry</h1>
+          <h1>
+            TraceX
+          </h1>
 
-            <p>
-              Crypto Fraud Investigation Suite
-            </p>
-          </div>
+          <p>
+            Crypto Fraud Investigation Suite
+          </p>
+
         </div>
 
-        {/* Login Card */}
 
-        <div className="login-card">
+        {/* =================================================
+            LOGIN CARD
+            ================================================= */}
+
+        <div className="login-card cs-login-card">
+
+          <div className="cs-login-bar" />
+
+
+          {/* =================================================
+              CARD HEADER
+              ================================================= */}
 
           <div className="login-card-header">
-            <h2>Secure Login</h2>
+
+            <h2>
+              Welcome Back
+            </h2>
 
             <p>
-              Access the Chain Sentry investigation platform
+              Sign in to continue to your
+              cryptocurrency investigation
+              dashboard.
             </p>
+
           </div>
 
+
+          {/* =================================================
+              FORM
+              ================================================= */}
+
           <form
+            className="login-form cs-login-form"
             onSubmit={handleSubmit}
-            className="login-form"
           >
 
-            {/* Email */}
+            {/* ===============================================
+                EMAIL
+                =============================================== */}
 
-            <div className="login-field">
+            <div className="login-field form-group">
 
-              <label htmlFor="email">
+              <label htmlFor="login-email">
                 Email Address
               </label>
 
               <input
-                id="email"
+                id="login-email"
                 type="email"
                 value={email}
-                onChange={(e) =>
-                  setEmail(e.target.value)
+                onChange={(event) =>
+                  setEmail(
+                    event.target.value
+                  )
                 }
                 placeholder="investigator@example.com"
                 autoComplete="email"
                 disabled={
-                  loading || helloLoading || !!faceMode
+                  loading ||
+                  helloLoading ||
+                  !!faceMode
                 }
               />
 
             </div>
 
-            {/* Password */}
 
-            <div className="login-field">
+            {/* ===============================================
+                PASSWORD
+                =============================================== */}
 
-              <div className="login-label-row">
+            <div className="login-field form-group">
 
-                <label htmlFor="password">
-                  Password
-                </label>
-
-                <span>
-                  Secure access
-                </span>
-
-              </div>
+              <label htmlFor="login-password">
+                Password
+              </label>
 
               <input
-                id="password"
+                id="login-password"
                 type="password"
                 value={password}
-                onChange={(e) =>
-                  setPassword(e.target.value)
+                onChange={(event) =>
+                  setPassword(
+                    event.target.value
+                  )
                 }
                 placeholder="Enter your password"
                 autoComplete="current-password"
                 disabled={
-                  loading || helloLoading || !!faceMode
+                  loading ||
+                  helloLoading ||
+                  !!faceMode
                 }
               />
 
             </div>
 
-            {/* Error */}
+
+            {/* ===============================================
+                ERROR
+                =============================================== */}
 
             {error && (
-              <div className="login-error">
-                <span className="login-error-icon">
-                  !
-                </span>
+              <div className="login-error cs-login-error">
 
-                <span>{error}</span>
+                <div className="login-error-icon">
+                  !
+                </div>
+
+                <div>
+                  {error}
+                </div>
+
               </div>
             )}
 
-            {/* Firebase Login */}
+
+            {/* ===============================================
+                SIGN IN
+                =============================================== */}
 
             <button
               type="submit"
-              className="login-primary-button"
+              className="login-primary-button cs-login-submit"
               disabled={
-                loading || helloLoading || !!faceMode
+                loading ||
+                helloLoading ||
+                !!faceMode
               }
             >
 
-              {loading ? (
-                <>
-                  <span className="login-spinner"></span>
-                  Signing in...
-                </>
-              ) : (
-                <>
-                  Sign In
-                  <span>→</span>
-                </>
+              {(loading ||
+                helloLoading) && (
+                <span className="login-spinner" />
               )}
+
+              {loading
+                ? "Signing In..."
+                : helloLoading
+                ? "Waiting for Windows Hello..."
+                : "Sign In"}
 
             </button>
 
           </form>
 
-          {/* Divider */}
+
+          {/* =================================================
+              DIVIDER
+              ================================================= */}
 
           <div className="login-divider">
-            <span></span>
-            <p>OR</p>
-            <span></span>
+
+            <span />
+
+            <p>
+              OR
+            </p>
+
+            <span />
+
           </div>
 
-        
 
-         
-          {/* Register */}
+          {/* =================================================
+              CREATE ACCOUNT
+              ================================================= */}
 
           <button
-  type="button"
-  className="register-hello-button"
-  onClick={handleRegisterWindowsHello}
-  disabled={
-    loading || helloLoading || !!faceMode
-  }
->
-  {helloLoading ? (
-    <>
-      <span className="login-spinner"></span>
-      Registering Fingerprint...
-    </>
-  ) : (
-    "Sign Up — Fingerprint & Face"
-  )}
-</button>
+            type="button"
+            className="login-secondary-button"
+            onClick={
+              handleCreateAccount
+            }
+            disabled={
+              loading ||
+              helloLoading ||
+              !!faceMode
+            }
+          >
+            Create New Account
+          </button>
 
-          {/* Security information */}
 
-          <div className="login-security">
+          {/* =================================================
+              BIOMETRIC STATUS
+              ================================================= */}
 
-            <span className="security-dot"></span>
+          {biometricStep && (
+            <div className="login-security-info">
 
-            <span>
-              Protected with secure authentication
-            </span>
+              <div className="security-icon">
+                {biometricStep ===
+                "windows-hello"
+                  ? "◉"
+                  : "◌"}
+              </div>
 
-          </div>
+              <div>
+
+                <strong>
+                  {biometricStep ===
+                  "windows-hello"
+                    ? "Windows Hello / Fingerprint"
+                    : "Face Verification"}
+                </strong>
+
+                <span>
+                  {biometricStep ===
+                  "windows-hello"
+                    ? "Verify your identity using your registered Windows Hello credential."
+                    : "Look directly at the camera to complete authentication."}
+                </span>
+
+              </div>
+
+            </div>
+          )}
+
+
+          {/* =================================================
+              SECURITY FOOTER
+              ================================================= */}
+
+          {!biometricStep && (
+            <div className="login-security-info">
+
+              <div className="security-icon">
+                🔒
+              </div>
+
+              <div>
+
+                <strong>
+                  Multi-Layer Security
+                </strong>
+
+                <span>
+                  Password + Windows Hello / fingerprint + face verification
+                </span>
+
+              </div>
+
+            </div>
+          )}
 
         </div>
 
-        {/* Footer */}
 
-        <div className="login-footer">
+        {/* =================================================
+            FOOTER
+            ================================================= */}
+
+        <div className="login-footer cs-login-footer">
 
           <span>
-            Chain Sentry
+            TraceX
           </span>
 
-          <span>•</span>
+          <span>
+            •
+          </span>
 
           <span>
             Blockchain Intelligence Platform
@@ -1155,18 +1841,26 @@ const handleFaceClose = () => {
 
         </div>
 
-        {faceMode && (
-          <FaceRecognition
-            email={email.trim().toLowerCase()}
-            mode={faceMode}
-            onSuccess={handleFaceSuccess}
-            onClose={handleFaceClose}
-          />
-        )}
-
       </div>
+
+
+      {/* ===================================================
+          AUTOMATIC FACE AUTHENTICATION
+          =================================================== */}
+
+      {faceMode === "login" && (
+        <FaceRecognition
+          email={email}
+          mode="login"
+          onSuccess={
+            handleFaceSuccess
+          }
+          onClose={
+            handleFaceClose
+          }
+        />
+      )}
+
     </div>
   );
 }
-
-export default Login;

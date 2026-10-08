@@ -10,6 +10,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import "./Dashboard.css";
 import { getDashboardStats } from "../../services/appData";
 
+
 setWorkerUrl(maplibreWorker);
 
 const CARTO_STYLE_URL = `https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json${

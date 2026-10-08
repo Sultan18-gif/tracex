@@ -1,10 +1,11 @@
+import { auth } from "../src/firebase.js";
 import { API_BASE_URL } from "../src/api.js";
 
 const API_URL = API_BASE_URL;
 
 /* =========================================================
    API HELPER
-   ========================================================= */
+========================================================= */
 
 async function apiRequest(endpoint, options = {}) {
   const response = await fetch(`${API_URL}${endpoint}`, {
@@ -26,6 +27,7 @@ async function apiRequest(endpoint, options = {}) {
   if (!response.ok) {
     throw new Error(
       data?.message ||
+        data?.error ||
         `Request failed with status ${response.status}`
     );
   }
@@ -35,31 +37,26 @@ async function apiRequest(endpoint, options = {}) {
 
 /* =========================================================
    APP DATA
-   ========================================================= */
+========================================================= */
 
 export async function getAppData() {
-  const [cases, wallets] = await Promise.all([
+  const [cases, wallets, reports] = await Promise.all([
     getCases(),
     getWallets(),
+    getReports(),
   ]);
 
   return {
     investigations: [],
     cases,
-    reports: [],
+    reports,
     wallets,
   };
 }
 
 /* =========================================================
    INVESTIGATIONS
-   ========================================================= */
-
-/*
-  The current backend does not expose an investigations route.
-  Keep these functions available so existing frontend imports
-  do not break.
-*/
+========================================================= */
 
 export async function getInvestigations() {
   return [];
@@ -77,9 +74,11 @@ export async function saveInvestigation() {
 
 /* =========================================================
    WALLETS
-   ========================================================= */
+========================================================= */
+
 export async function getWallets() {
   const data = await apiRequest("/wallets");
+
   return Array.isArray(data) ? data : [];
 }
 
@@ -114,7 +113,7 @@ export async function analyzeWallet(walletAddress) {
 
 /* =========================================================
    TRANSACTIONS
-   ========================================================= */
+========================================================= */
 
 export async function getTransactions(walletAddress) {
   if (!walletAddress) {
@@ -124,17 +123,6 @@ export async function getTransactions(walletAddress) {
   const data = await apiRequest(
     `/transactions/${encodeURIComponent(walletAddress)}`
   );
-
-  /*
-    Backend returns:
-
-    {
-      walletAddress: "...",
-      transactions: []
-    }
-
-    rather than directly returning the array.
-  */
 
   if (Array.isArray(data)) {
     return data;
@@ -149,7 +137,7 @@ export async function getTransactions(walletAddress) {
 
 /* =========================================================
    CASES
-   ========================================================= */
+========================================================= */
 
 export async function getCases() {
   const data = await apiRequest("/cases");
@@ -175,18 +163,9 @@ export async function getCase(caseId) {
   );
 }
 
-/*
-  Frontend case structure:
-    wallets
-    priority
-    status
-    agent
-
-  Backend case structure:
-    walletAddress
-    riskScore
-    status
-*/
+/* =========================================================
+   NORMALIZE CASE
+========================================================= */
 
 function normalizeCase(item) {
   if (!item) {
@@ -290,6 +269,10 @@ function getWalletAddressFromCase(caseData) {
   return "";
 }
 
+/* =========================================================
+   CREATE CASE
+========================================================= */
+
 export async function createCase(caseData = {}) {
   const walletAddress =
     getWalletAddressFromCase(caseData);
@@ -331,11 +314,6 @@ export async function createCase(caseData = {}) {
   return normalizeCase(data);
 }
 
-/*
-  The current backend does not expose PUT/PATCH for cases.
-  Do not write to localStorage or pretend the update succeeded.
-*/
-
 export async function updateCase() {
   throw new Error(
     "Case updates are not supported by the current backend."
@@ -350,22 +328,34 @@ export async function deleteCase() {
 
 /* =========================================================
    REPORTS
-   ========================================================= */
+========================================================= */
 
 /*
-  The current backend only supports:
+  Report API:
 
     POST /api/reports/generate
-
-  There is no GET /api/reports endpoint yet.
+    GET  /api/reports
+    GET  /api/reports/:reportId
 */
 
 export async function getReports() {
-  return [];
+  const data = await apiRequest("/reports");
+
+  return Array.isArray(data)
+    ? data
+    : Array.isArray(data?.reports)
+    ? data.reports
+    : [];
 }
 
-export async function getReport() {
-  return null;
+export async function getReport(reportId) {
+  if (!reportId) {
+    throw new Error("Report ID is required.");
+  }
+
+  return apiRequest(
+    `/reports/${encodeURIComponent(reportId)}`
+  );
 }
 
 export async function generateReport(caseId) {
@@ -383,21 +373,30 @@ export async function generateReport(caseId) {
   });
 }
 
-export async function deleteReport() {
-  throw new Error(
-    "Report deletion is not supported by the current backend."
+export async function deleteReport(reportId) {
+  if (!reportId) {
+    throw new Error("Report ID is required.");
+  }
+
+  return apiRequest(
+    `/reports/${encodeURIComponent(reportId)}`,
+    {
+      method: "DELETE",
+    }
   );
 }
 
 /* =========================================================
    DASHBOARD STATISTICS
-   ========================================================= */
+========================================================= */
 
 export async function getDashboardStats() {
-  const [cases, wallets] = await Promise.all([
-    getCases(),
-    getWallets(),
-  ]);
+  const [cases, wallets, reports] =
+    await Promise.all([
+      getCases(),
+      getWallets(),
+      getReports(),
+    ]);
 
   const activeCases = cases.filter(
     (item) =>
@@ -438,14 +437,6 @@ export async function getDashboardStats() {
     }
   });
 
-  /*
-    The case API does not contain transaction arrays.
-
-    Therefore transaction count is taken from the transactions
-    attached to cases when available. We do not fabricate a
-    transaction count from unavailable backend data.
-  */
-
   let transactionCount = 0;
 
   cases.forEach((item) => {
@@ -471,13 +462,115 @@ export async function getDashboardStats() {
 
     investigations: 0,
 
-    reportsGenerated: 0,
+    reportsGenerated:
+      reports.length,
   };
 }
 
 /* =========================================================
+   VASPs
+========================================================= */
+
+export async function getVASPs() {
+  const data = await apiRequest("/vasps");
+
+  return Array.isArray(data)
+    ? data
+    : [];
+}
+
+export async function getVASP(vaspId) {
+  if (!vaspId) {
+    return null;
+  }
+
+  return apiRequest(
+    `/vasps/${encodeURIComponent(vaspId)}`
+  );
+}
+
+export async function createVASP(vaspData = {}) {
+  if (!vaspData.name?.trim()) {
+    throw new Error(
+      "VASP name is required."
+    );
+  }
+
+  return apiRequest("/vasps", {
+    method: "POST",
+
+    body: JSON.stringify({
+      name: vaspData.name.trim(),
+      type:
+        vaspData.type ||
+        "Exchange",
+      country:
+        vaspData.country ||
+        "",
+      jurisdiction:
+        vaspData.jurisdiction ||
+        "",
+      riskLevel:
+        vaspData.riskLevel ||
+        "Unknown",
+      status:
+        vaspData.status ||
+        "Active",
+      website:
+        vaspData.website ||
+        "",
+      addresses:
+        Array.isArray(
+          vaspData.addresses
+        )
+          ? vaspData.addresses
+          : [],
+      notes:
+        vaspData.notes ||
+        "",
+    }),
+  });
+}
+
+export async function updateVASP(
+  vaspId,
+  vaspData = {}
+) {
+  if (!vaspId) {
+    throw new Error(
+      "VASP ID is required."
+    );
+  }
+
+  return apiRequest(
+    `/vasps/${encodeURIComponent(vaspId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(
+        vaspData
+      ),
+    }
+  );
+}
+
+export async function deleteVASP(vaspId) {
+  if (!vaspId) {
+    throw new Error(
+      "VASP ID is required."
+    );
+  }
+
+  return apiRequest(
+    `/vasps/${encodeURIComponent(vaspId)}`,
+    {
+      method: "DELETE",
+    }
+  );
+}
+
+/* =========================================================
    HELPERS
-   ========================================================= */
+========================================================= */
 
 function formatDate(value) {
   if (!value) {
@@ -490,87 +583,28 @@ function formatDate(value) {
         ? value.toDate()
         : new Date(value);
 
-    if (Number.isNaN(date.getTime())) {
+    if (
+      Number.isNaN(
+        date.getTime()
+      )
+    ) {
       return "";
     }
 
-    return date.toISOString().slice(0, 10);
+    return date
+      .toISOString()
+      .slice(0, 10);
   } catch {
     return "";
   }
 }
 
 /*
-  Kept only for compatibility with any existing imports.
-
-  Application data is now stored in the backend,
-  not in browser localStorage.
+  Backend stores application data.
 */
 
 export function clearAppData() {
   console.warn(
     "clearAppData() is disabled because application data is stored in the backend."
-  );
-}
-export async function getVASPs() {
-  const data = await apiRequest("/vasps");
-  return Array.isArray(data) ? data : [];
-}
-
-export async function getVASP(vaspId) {
-  if (!vaspId) return null;
-
-  return apiRequest(
-    `/vasps/${encodeURIComponent(vaspId)}`
-  );
-}
-
-export async function createVASP(vaspData = {}) {
-  if (!vaspData.name?.trim()) {
-    throw new Error("VASP name is required.");
-  }
-
-  return apiRequest("/vasps", {
-    method: "POST",
-    body: JSON.stringify({
-      name: vaspData.name.trim(),
-      type: vaspData.type || "Exchange",
-      country: vaspData.country || "",
-      jurisdiction: vaspData.jurisdiction || "",
-      riskLevel: vaspData.riskLevel || "Unknown",
-      status: vaspData.status || "Active",
-      website: vaspData.website || "",
-      addresses: Array.isArray(vaspData.addresses)
-        ? vaspData.addresses
-        : [],
-      notes: vaspData.notes || "",
-    }),
-  });
-}
-
-export async function updateVASP(vaspId, vaspData = {}) {
-  if (!vaspId) {
-    throw new Error("VASP ID is required.");
-  }
-
-  return apiRequest(
-    `/vasps/${encodeURIComponent(vaspId)}`,
-    {
-      method: "PUT",
-      body: JSON.stringify(vaspData),
-    }
-  );
-}
-
-export async function deleteVASP(vaspId) {
-  if (!vaspId) {
-    throw new Error("VASP ID is required.");
-  }
-
-  return apiRequest(
-    `/vasps/${encodeURIComponent(vaspId)}`,
-    {
-      method: "DELETE",
-    }
   );
 }

@@ -3,9 +3,11 @@ import { NavLink } from "react-router-dom";
 export default function Sidebar({ open, onClose }) {
   const links = [
   { name: "Dashboard", path: "/dashboard" },
+  { name: "Wallet Investigation", path: "/wallet-investigation" },
   { name: "Transactions", path: "/transactions" },
   { name: "VASP Network", path: "/vasps" },
   { name: "Network Graph", path: "/network" },
+  { name: "Cases", path: "/cases" },
   { name: "Reports", path: "/reports" },
 ];
 

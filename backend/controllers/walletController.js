@@ -1,5 +1,5 @@
-const axios = require("axios");
 const { db } = require("../firebase");
+const { getWalletTransactions } = require("../services/blockchain/transactionService");
 
 /*
   Calculate wallet risk from real transaction statistics.
@@ -67,29 +67,9 @@ const analyzeWallet = async (req, res) => {
     const normalizedAddress =
       walletAddress.trim().toLowerCase();
 
-    const apiKey =
-      process.env.ETHERSCAN_API_KEY ||
-      "YourApiKeyToken";
-
-    const etherscanUrl =
-      `https://api.etherscan.io/api` +
-      `?module=account` +
-      `&action=txlist` +
-      `&address=${encodeURIComponent(normalizedAddress)}` +
-      `&startblock=0` +
-      `&endblock=99999999` +
-      `&page=1` +
-      `&offset=100` +
-      `&sort=desc` +
-      `&apikey=${apiKey}`;
-
-    const response = await axios.get(
-      etherscanUrl
-    );
-
-    const txs = Array.isArray(response.data?.result)
-      ? response.data.result
-      : [];
+    // Use the shared Etherscan V2 client. The previous V1 request is retired
+    // and can return a 500 even when the transaction endpoint succeeds.
+    const txs = await getWalletTransactions(normalizedAddress, "ETH");
 
     /*
       Transaction statistics
@@ -98,25 +78,13 @@ const analyzeWallet = async (req, res) => {
 
     const zeroValueTxs = txs.filter(
       (tx) =>
-        String(tx.value || "0") === "0"
+        Number(tx.amount || 0) === 0
     ).length;
 
-    const totalWei = txs.reduce(
-      (total, tx) => {
-        try {
-          return (
-            total +
-            BigInt(tx.value || "0")
-          );
-        } catch {
-          return total;
-        }
-      },
-      BigInt(0)
+    const totalEth = txs.reduce(
+      (total, tx) => total + (Number.isFinite(Number(tx.amount)) ? Number(tx.amount) : 0),
+      0
     );
-
-    const totalEth =
-      Number(totalWei) / 1e18;
 
     /*
       Calculate risk
@@ -133,15 +101,15 @@ const analyzeWallet = async (req, res) => {
     const counterparties = new Set();
 
     txs.forEach((tx) => {
-      if (tx.from) {
+      if (tx.sender) {
         counterparties.add(
-          tx.from.toLowerCase()
+          tx.sender.toLowerCase()
         );
       }
 
-      if (tx.to) {
+      if (tx.receiver) {
         counterparties.add(
-          tx.to.toLowerCase()
+          tx.receiver.toLowerCase()
         );
       }
     });
@@ -173,16 +141,21 @@ const analyzeWallet = async (req, res) => {
     /*
       Save investigation to Firebase
     */
-    const docRef = await db
-      .collection("tracked_wallets")
-      .add(walletData);
+    let id = null;
+    let persisted = false;
+    if (db) {
+      const docRef = await db.collection("tracked_wallets").add(walletData);
+      id = docRef.id;
+      persisted = true;
+    }
 
     return res.status(200).json({
-      id: docRef.id,
+      id,
       ...walletData,
-
-      message:
-        "Wallet analyzed and saved successfully",
+      persisted,
+      message: persisted
+        ? "Wallet analyzed and saved successfully"
+        : "Wallet analyzed. Firebase persistence is not configured.",
     });
 
   } catch (error) {
@@ -192,9 +165,8 @@ const analyzeWallet = async (req, res) => {
         error.message
     );
 
-    return res.status(500).json({
-      error:
-        "Failed to analyze wallet address",
+    return res.status(error.statusCode || 500).json({
+      error: error.message || "Failed to analyze wallet address",
     });
   }
 };

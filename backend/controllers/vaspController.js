@@ -1,6 +1,96 @@
 const { db } = require("../firebase");
+const axios = require("axios");
 
 const VASP_COLLECTION = "vasps";
+
+async function geocodeLocation(physicalLocation, country = "", jurisdiction = "") {
+  const query = [physicalLocation, jurisdiction, country]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join(", ");
+
+  if (!query) {
+    return {
+      latitude: null,
+      longitude: null,
+      locationLabel: "",
+      locationSource: "",
+    };
+  }
+
+  let lookupFailed = false;
+
+  try {
+    const response = await axios.get(
+      "https://nominatim.openstreetmap.org/search",
+      {
+        params: { q: query, format: "jsonv2", limit: 1 },
+        headers: {
+          "User-Agent": process.env.GEOCODING_USER_AGENT || "TraceX-VASP-Locator/1.0",
+          "Accept-Language": "en",
+        },
+        timeout: 10000,
+      }
+    );
+
+    const match = Array.isArray(response.data) ? response.data[0] : null;
+    const latitude = Number(match?.lat);
+    const longitude = Number(match?.lon);
+
+    if (match && Number.isFinite(latitude) && Number.isFinite(longitude)) {
+      return {
+        latitude,
+        longitude,
+        locationLabel: match.display_name || query,
+        locationSource: "OpenStreetMap",
+      };
+    }
+  } catch (error) {
+    lookupFailed = true;
+    console.warn("OpenStreetMap location lookup failed:", error.message);
+  }
+
+  try {
+    const response = await axios.get("https://photon.komoot.io/api/", {
+      params: { q: query, limit: 1, lang: "en" },
+      timeout: 10000,
+    });
+    const match = Array.isArray(response.data?.features)
+      ? response.data.features[0]
+      : null;
+    const [longitude, latitude] = match?.geometry?.coordinates || [];
+
+    if (Number.isFinite(Number(latitude)) && Number.isFinite(Number(longitude))) {
+      const properties = match.properties || {};
+      const label = [
+        properties.name,
+        properties.city,
+        properties.state,
+        properties.country,
+      ]
+        .filter(Boolean)
+        .join(", ");
+
+      return {
+        latitude: Number(latitude),
+        longitude: Number(longitude),
+        locationLabel: label || query,
+        locationSource: "OpenStreetMap",
+      };
+    }
+  } catch (error) {
+    lookupFailed = true;
+    console.warn("Fallback location lookup failed:", error.message);
+  }
+
+  const error = new Error(
+    lookupFailed
+      ? "The map location lookup is unavailable. Please try again."
+      : "No map location was found. Enter a more specific physical address, city, or country."
+  );
+  error.statusCode = lookupFailed ? 503 : 422;
+  throw error;
+}
 
 function normalizeVasp(data = {}, id = null) {
   return {
@@ -12,6 +102,8 @@ function normalizeVasp(data = {}, id = null) {
     physicalLocation: data.physicalLocation || data.location || "",
     latitude: data.latitude ?? data.lat ?? null,
     longitude: data.longitude ?? data.lng ?? null,
+    locationLabel: data.locationLabel || "",
+    locationSource: data.locationSource || "",
     riskLevel: data.riskLevel || "Unknown",
     status: data.status || "Active",
     website: data.website || "",
@@ -92,15 +184,7 @@ exports.createVASP = async (req, res) => {
       });
     }
 
-    const parsedLatitude = latitude === "" || latitude == null ? null : Number(latitude);
-    const parsedLongitude = longitude === "" || longitude == null ? null : Number(longitude);
-    if ((parsedLatitude == null) !== (parsedLongitude == null) ||
-        (parsedLatitude != null && (!Number.isFinite(parsedLatitude) || parsedLatitude < -90 || parsedLatitude > 90)) ||
-        (parsedLongitude != null && (!Number.isFinite(parsedLongitude) || parsedLongitude < -180 || parsedLongitude > 180))) {
-      return res.status(400).json({
-        message: "Provide both valid coordinates: latitude from -90 to 90 and longitude from -180 to 180.",
-      });
-    }
+    const location = await geocodeLocation(physicalLocation, country, jurisdiction);
 
     const now = new Date().toISOString();
 
@@ -110,8 +194,10 @@ exports.createVASP = async (req, res) => {
       country: country || "",
       jurisdiction: jurisdiction || "",
       physicalLocation: physicalLocation || "",
-      latitude: parsedLatitude,
-      longitude: parsedLongitude,
+      latitude: location.latitude,
+      longitude: location.longitude,
+      locationLabel: location.locationLabel,
+      locationSource: location.locationSource,
       riskLevel: riskLevel || "Unknown",
       status: status || "Active",
       website: website || "",
@@ -131,8 +217,8 @@ exports.createVASP = async (req, res) => {
   } catch (error) {
     console.error("Error creating VASP:", error);
 
-    res.status(500).json({
-      message: "Failed to create VASP",
+    res.status(error.statusCode || 500).json({
+      message: error.message || "Failed to create VASP",
       error: error.message,
     });
   }
@@ -160,8 +246,6 @@ exports.updateVASP = async (req, res) => {
       "country",
       "jurisdiction",
       "physicalLocation",
-      "latitude",
-      "longitude",
       "riskLevel",
       "status",
       "website",
@@ -177,18 +261,17 @@ exports.updateVASP = async (req, res) => {
       }
     });
 
-    if (updates.latitude !== undefined || updates.longitude !== undefined) {
-      const latitude = updates.latitude === "" || updates.latitude == null ? null : Number(updates.latitude);
-      const longitude = updates.longitude === "" || updates.longitude == null ? null : Number(updates.longitude);
-      if ((latitude == null) !== (longitude == null) ||
-          (latitude != null && (!Number.isFinite(latitude) || latitude < -90 || latitude > 90)) ||
-          (longitude != null && (!Number.isFinite(longitude) || longitude < -180 || longitude > 180))) {
-        return res.status(400).json({
-          message: "Provide both valid coordinates: latitude from -90 to 90 and longitude from -180 to 180.",
-        });
-      }
-      updates.latitude = latitude;
-      updates.longitude = longitude;
+    if (updates.physicalLocation !== undefined || updates.country !== undefined) {
+      const current = existing.data();
+      const location = await geocodeLocation(
+        updates.physicalLocation ?? current.physicalLocation,
+        updates.country ?? current.country,
+        updates.jurisdiction ?? current.jurisdiction
+      );
+      updates.latitude = location.latitude;
+      updates.longitude = location.longitude;
+      updates.locationLabel = location.locationLabel;
+      updates.locationSource = location.locationSource;
     }
 
     updates.updatedAt = new Date().toISOString();
@@ -203,8 +286,8 @@ exports.updateVASP = async (req, res) => {
   } catch (error) {
     console.error("Error updating VASP:", error);
 
-    res.status(500).json({
-      message: "Failed to update VASP",
+    res.status(error.statusCode || 500).json({
+      message: error.message || "Failed to update VASP",
       error: error.message,
     });
   }

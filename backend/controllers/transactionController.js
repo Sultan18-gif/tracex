@@ -67,7 +67,8 @@ const analyzeTransactions = async (req, res) => {
 
     // Send transactions to Python ML engine
     const mlAnalysis = await analyzeTransactionsWithML(
-      transactions
+      transactions,
+      address
     );
 
     res.json({
@@ -86,7 +87,11 @@ const analyzeTransactions = async (req, res) => {
       error
     );
 
-    res.status(500).json({
+    const status = error.code === "ECONNREFUSED" || error.code === "ECONNABORTED"
+      ? 503
+      : 500;
+
+    res.status(status).json({
       message: "Unable to perform ML transaction analysis",
       error: error.message
     });

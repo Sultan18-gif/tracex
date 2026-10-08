@@ -8,3 +8,4 @@ dist/
 backend/serviceAccountKey.json
 __pycache__/
 *.py[cod]
+.vercel
