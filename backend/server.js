@@ -111,6 +111,19 @@ const vaspRoutes =
 
 const webauthnRoutes =
   require("./routes/webauthnRoutes");
+  console.log("Firebase module resolution check:");
+
+try {
+  console.log(
+    "Firebase path:",
+    require.resolve("./firebase.js")
+  );
+} catch (error) {
+  console.error(
+    "Firebase module cannot be resolved:",
+    error.message
+  );
+}
 
 /* API routes */
 
