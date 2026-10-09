@@ -4,7 +4,7 @@ import { getAuth } from "firebase/auth";
 import { getAnalytics, isSupported } from "firebase/analytics";
 
 const firebaseConfig = {
-  apiKey: "YOUR_ACTUAL_FIREBASE_API_KEY",
+  apiKey: "AIzaSyBjWAlMRN60z7ex97LOXVSLHXZUBHx77C8",
   authDomain: "crypto-fraud-investigation.firebaseapp.com",
   projectId: "crypto-fraud-investigation",
   storageBucket: "crypto-fraud-investigation.firebasestorage.app",
