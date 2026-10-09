@@ -1,3 +1,4 @@
+
 const express = require("express");
 const cors = require("cors");
 const fs = require("fs");
@@ -32,8 +33,7 @@ app.use(express.json());
 app.get("/api/health", async (req, res) => {
   if (!db) {
     return res.status(503).json({
-      message:
-        "Crypto Fraud Investigation Backend is running",
+      message: "Crypto Fraud Investigation Backend is running",
       firebase: "not_configured",
       details: configurationError,
     });
@@ -46,29 +46,22 @@ app.get("/api/health", async (req, res) => {
       .get();
 
     return res.json({
-      message:
-        "Crypto Fraud Investigation Backend is running",
+      message: "Crypto Fraud Investigation Backend is running",
       firebase: "connected",
     });
   } catch (error) {
-    console.error(
-      "Firestore health check failed:",
-      error
-    );
+    console.error("Firestore health check failed:", error);
 
     return res.status(503).json({
-      message:
-        "Crypto Fraud Investigation Backend is running",
+      message: "Crypto Fraud Investigation Backend is running",
       firebase: "unavailable",
-      error:
-        error.code ||
-        "firestore_request_failed",
+      error: error.code || "firestore_request_failed",
     });
   }
 });
 
 /* =========================================================
-   FIREBASE DEPENDENT ROUTES
+   FIREBASE-DEPENDENT ROUTES
 ========================================================= */
 
 app.use(
@@ -91,7 +84,7 @@ app.use(
 );
 
 /* =========================================================
-   ROUTES
+   LOAD ROUTES
 ========================================================= */
 
 const walletRoutes =
@@ -109,53 +102,45 @@ const reportRoutes =
 const vaspRoutes =
   require("./routes/vaspRoutes");
 
-const webauthnRoutes =
-  require("./routes/webauthnRoutes");
-  console.log("Firebase module resolution check:");
+/* =========================================================
+   FIREBASE MODULE DIAGNOSTIC
+========================================================= */
+
+console.log("==========================================");
+console.log("Firebase module resolution check");
 
 try {
-  console.log(
-    "Firebase path:",
-    require.resolve("./firebase.js")
-  );
+  const firebasePath =
+    require.resolve("./firebase.js");
+
+  console.log("Firebase path:", firebasePath);
+  console.log("Firebase module resolution: SUCCESS");
 } catch (error) {
-  console.error(
-    "Firebase module cannot be resolved:",
-    error.message
-  );
+  console.error("Firebase module resolution: FAILED");
+  console.error("Error:", error.message);
 }
 
-/* API routes */
+console.log("==========================================");
 
-app.use(
-  "/api/wallets",
-  walletRoutes
-);
+/* =========================================================
+   WEBAUTHN ROUTE
+========================================================= */
 
-app.use(
-  "/api/transactions",
-  transactionRoutes
-);
+const webauthnRoutes =
+  require("./routes/webauthnRoutes");
 
-app.use(
-  "/api/cases",
-  caseRoutes
-);
+/* =========================================================
+   MOUNT API ROUTES
+========================================================= */
 
-app.use(
-  "/api/reports",
-  reportRoutes
-);
+app.use("/api/wallets", walletRoutes);
+app.use("/api/transactions", transactionRoutes);
+app.use("/api/cases", caseRoutes);
+app.use("/api/reports", reportRoutes);
+app.use("/api/vasps", vaspRoutes);
+app.use("/api/webauthn", webauthnRoutes);
 
-app.use(
-  "/api/vasps",
-  vaspRoutes
-);
-
-app.use(
-  "/api/webauthn",
-  webauthnRoutes
-);
+console.log("WebAuthn routes mounted successfully");
 
 /* =========================================================
    SERVE REACT FRONTEND
@@ -167,33 +152,17 @@ const frontendDist = path.resolve(
 );
 
 if (fs.existsSync(frontendDist)) {
-  console.log(
-    `Serving frontend from: ${frontendDist}`
-  );
+  console.log(`Serving frontend from: ${frontendDist}`);
 
-  app.use(
-    express.static(frontendDist)
-  );
-
-  /*
-     React Router fallback.
-
-     Any request that isn't an API request
-     gets the React index.html.
-  */
+  app.use(express.static(frontendDist));
 
   app.get("*", (req, res, next) => {
-    if (
-      req.path.startsWith("/api/")
-    ) {
+    if (req.path.startsWith("/api/")) {
       return next();
     }
 
     res.sendFile(
-      path.join(
-        frontendDist,
-        "index.html"
-      ),
+      path.join(frontendDist, "index.html"),
       (error) => {
         if (error) {
           next(error);
@@ -202,9 +171,7 @@ if (fs.existsSync(frontendDist)) {
     );
   });
 } else {
-  console.warn(
-    `Frontend build not found: ${frontendDist}`
-  );
+  console.warn(`Frontend build not found: ${frontendDist}`);
 
   console.warn(
     "Run 'npm run build' inside the frontend directory before starting the production server."
@@ -212,71 +179,43 @@ if (fs.existsSync(frontendDist)) {
 }
 
 /* =========================================================
-   404
+   404 HANDLER
 ========================================================= */
 
-app.use(
-  (req, res) => {
-    res.status(404).json({
-      error: "Route not found",
-      path: req.originalUrl,
-    });
-  }
-);
+app.use((req, res) => {
+  res.status(404).json({
+    error: "Route not found",
+    path: req.originalUrl,
+  });
+});
 
 /* =========================================================
    ERROR HANDLER
 ========================================================= */
 
-app.use(
-  (error, req, res, next) => {
-    console.error(
-      "Unhandled server error:",
-      error
-    );
+app.use((error, req, res, next) => {
+  console.error("Unhandled server error:", error);
 
-    res.status(500).json({
-      error:
-        "Internal server error",
-      message:
-        error.message ||
-        "Unknown server error",
-    });
-  }
-);
+  res.status(500).json({
+    error: "Internal server error",
+    message: error.message || "Unknown server error",
+  });
+});
 
 /* =========================================================
    START SERVER
 ========================================================= */
 
-const PORT =
-  process.env.PORT || 5001;
+const PORT = process.env.PORT || 5001;
 
-app.listen(
-  PORT,
-  () => {
-    console.log("");
-    console.log(
-      "=========================================="
-    );
-    console.log(
-      " TraceX Crypto Fraud Investigation"
-    );
-    console.log(
-      "=========================================="
-    );
-    console.log(
-      ` Server: http://localhost:${PORT}`
-    );
-    console.log(
-      ` Frontend: http://localhost:${PORT}`
-    );
-    console.log(
-      ` API: http://localhost:${PORT}/api`
-    );
-    console.log(
-      "=========================================="
-    );
-    console.log("");
-  }
-);
+app.listen(PORT, () => {
+  console.log("");
+  console.log("==========================================");
+  console.log(" TraceX Crypto Fraud Investigation");
+  console.log("==========================================");
+  console.log(` Server: http://localhost:${PORT}`);
+  console.log(` Frontend: http://localhost:${PORT}`);
+  console.log(` API: http://localhost:${PORT}/api`);
+  console.log("==========================================");
+  console.log("");
+});
